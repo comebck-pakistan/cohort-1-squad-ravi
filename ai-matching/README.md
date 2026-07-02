@@ -1,6 +1,17 @@
-# Mahir Bot — Code-First Rewrite
+# Bot — Code-First Rewrite
 
 This is a plain Node.js/Express rewrite of your n8n workflow. Same logic, same Supabase tables, same Groq prompt, same randomized replies — just as code instead of visual nodes.
+
+## Changelog — Changes by Qaim (committed on private repo, not yet pushed to squad branch)
+
+These changes exist on the private repo (`qaimhussain/ai-matching`, connected to Railway) and are tested/working, but have not yet been uploaded to the squad branch (`qaimhussain/ai-matching` on `cohort-1-squad-ravi`).
+
+- **Typing effect** — bot now simulates a natural typing delay before sending replies, instead of responding instantly
+- **Skip option for LinkedIn/CV step** — users can now skip the LinkedIn/CV step during onboarding instead of being forced through it
+- **Reset "Mahir" flow fixed** — reset command now correctly clears prior conversation/freelancer rows and restarts onboarding cleanly
+- **Conversation-state memory fixed** — bot previously failed to remember earlier onboarding steps and looped back to "Freelancer or Client?"; this is now fixed, so the bot correctly progresses through each step using saved conversation state
+- **Randomized question phrasing** — each onboarding step now pulls from multiple pre-written variants of the same question at random, so the conversation feels more natural and less scripted/repetitive
+- **Natural post-completion replies** — after "Your profile has been set up, we'll be in touch," follow-up messages like "perfect," "thanks," or similar acknowledgements now get a natural, varied response instead of repeating the setup-complete message again
 
 ## What each file does
 
