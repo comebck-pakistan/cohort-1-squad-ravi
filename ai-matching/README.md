@@ -8,10 +8,13 @@ These changes exist on the private repo (`qaimhussain/ai-matching`, connected to
 
 - **Typing effect** — bot now simulates a natural typing delay before sending replies, instead of responding instantly
 - **Skip option for LinkedIn/CV step** — users can now skip the LinkedIn/CV step during onboarding instead of being forced through it
-- **Reset "Mahir" flow fixed** — reset command now correctly clears prior conversation/freelancer rows and restarts onboarding cleanly
+- **Reset "Ai" flow fixed** — reset command now correctly clears prior conversation/freelancer rows and restarts onboarding cleanly
 - **Conversation-state memory fixed** — bot previously failed to remember earlier onboarding steps and looped back to "Freelancer or Client?"; this is now fixed, so the bot correctly progresses through each step using saved conversation state
 - **Randomized question phrasing** — each onboarding step now pulls from multiple pre-written variants of the same question at random, so the conversation feels more natural and less scripted/repetitive
 - **Natural post-completion replies** — after "Your profile has been set up, we'll be in touch," follow-up messages like "perfect," "thanks," or similar acknowledgements now get a natural, varied response instead of repeating the setup-complete message again
+
+- **Add unsupported file type reply, fix name mid-flow**
+ 
 
 ## What each file does
 
