@@ -1,20 +1,6 @@
-# Bot — Code-First Rewrite
+# AI Matching Bot — Code-First Rewrite
 
 This is a plain Node.js/Express rewrite of your n8n workflow. Same logic, same Supabase tables, same Groq prompt, same randomized replies — just as code instead of visual nodes.
-
-## Changelog — Changes by Qaim (committed on private repo, not yet pushed to squad branch)
-
-These changes exist on the private repo (`qaimhussain/ai-matching`, connected to Railway) and are tested/working, but have not yet been uploaded to the squad branch (`qaimhussain/ai-matching` on `cohort-1-squad-ravi`).
-
-- **Typing effect** — bot now simulates a natural typing delay before sending replies, instead of responding instantly
-- **Skip option for LinkedIn/CV step** — users can now skip the LinkedIn/CV step during onboarding instead of being forced through it
-- **Reset "Ai" flow fixed** — reset command now correctly clears prior conversation/freelancer rows and restarts onboarding cleanly
-- **Conversation-state memory fixed** — bot previously failed to remember earlier onboarding steps and looped back to "Freelancer or Client?"; this is now fixed, so the bot correctly progresses through each step using saved conversation state
-- **Randomized question phrasing** — each onboarding step now pulls from multiple pre-written variants of the same question at random, so the conversation feels more natural and less scripted/repetitive
-- **Natural post-completion replies** — after "Your profile has been set up, we'll be in touch," follow-up messages like "perfect," "thanks," or similar acknowledgements now get a natural, varied response instead of repeating the setup-complete message again
-
-- **Add unsupported file type reply, fix name mid-flow**
- 
 
 ## What each file does
 
@@ -38,11 +24,11 @@ npm -v
 
 ## Step 2 — Open the project in Antigravity
 
-Open the `mahir-bot` folder as your project root. That's it — it's a normal Node.js project, no special config needed for any IDE.
+Open the project folder as your project root. That's it — it's a normal Node.js project, no special config needed for any IDE.
 
 ## Step 3 — Install dependencies
 
-In the terminal, inside the `mahir-bot` folder:
+In the terminal, inside the project folder:
 ```
 npm install
 ```
@@ -68,7 +54,7 @@ Then open `.env` and fill in your real values:
 ```
 npm run dev
 ```
-You should see `🚀 Mahir bot listening on port 3000`.
+You should see `🚀 The bot listening on port 3000`.
 
 ## Step 6 — Expose it to the internet for testing (before deploying)
 
@@ -92,7 +78,7 @@ Basic steps:
 ```
 git init
 git add .
-git commit -m "Initial code-first Mahir bot"
+git commit -m "Initial code-first bot"
 git branch -M main
 git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
 git push -u origin main
@@ -106,7 +92,7 @@ You can absolutely reuse your existing Railway account — just create a **new s
 1. Railway dashboard → New Project → Deploy from GitHub repo → pick your repo
 2. Railway auto-detects Node.js and runs `npm install` + `npm start`
 3. Go to the new service → Variables tab → add all the same variables from your `.env` file (Railway injects these at runtime, same idea as n8n's Service Variables you already saw)
-4. Once deployed, Railway gives you a public URL like `https://mahir-bot-production.up.railway.app` — use `https://.../webhook` as your permanent webhook URL in Meta's dashboard (replacing the ngrok one)
+4. Once deployed, Railway gives you a public URL like `https://your-bot-production.up.railway.app` — use `https://.../webhook` as your permanent webhook URL in Meta's dashboard (replacing the ngrok one)
 
 From here on, every `git push` to your GitHub repo auto-redeploys — no manual steps.
 
