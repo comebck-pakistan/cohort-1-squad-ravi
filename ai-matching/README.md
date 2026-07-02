@@ -38,11 +38,11 @@ npm -v
 
 ## Step 2 — Open the project in Antigravity
 
-Open the `mahir-bot` folder as your project root. That's it — it's a normal Node.js project, no special config needed for any IDE.
+Open the `ai-matching` folder as your project root. That's it — it's a normal Node.js project, no special config needed for any IDE.
 
 ## Step 3 — Install dependencies
 
-In the terminal, inside the `mahir-bot` folder:
+In the terminal, inside the `ai-matching` folder:
 ```
 npm install
 ```
@@ -68,7 +68,7 @@ Then open `.env` and fill in your real values:
 ```
 npm run dev
 ```
-You should see `🚀 Mahir bot listening on port 3000`.
+You should see `🚀 bot listening on port 3000`.
 
 ## Step 6 — Expose it to the internet for testing (before deploying)
 
@@ -92,7 +92,7 @@ Basic steps:
 ```
 git init
 git add .
-git commit -m "Initial code-first Mahir bot"
+git commit -m "Initial code-first ai matching bot"
 git branch -M main
 git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
 git push -u origin main
@@ -106,7 +106,7 @@ You can absolutely reuse your existing Railway account — just create a **new s
 1. Railway dashboard → New Project → Deploy from GitHub repo → pick your repo
 2. Railway auto-detects Node.js and runs `npm install` + `npm start`
 3. Go to the new service → Variables tab → add all the same variables from your `.env` file (Railway injects these at runtime, same idea as n8n's Service Variables you already saw)
-4. Once deployed, Railway gives you a public URL like `https://mahir-bot-production.up.railway.app` — use `https://.../webhook` as your permanent webhook URL in Meta's dashboard (replacing the ngrok one)
+4. Once deployed, Railway gives you a public URL like `https://ai-matching-production.up.railway.app` — use `https://.../webhook` as your permanent webhook URL in Meta's dashboard (replacing the ngrok one)
 
 From here on, every `git push` to your GitHub repo auto-redeploys — no manual steps.
 
