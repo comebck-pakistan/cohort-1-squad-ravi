@@ -1,4 +1,4 @@
-# Mahir Bot — Code-First Rewrite
+# Bot — Code-First Rewrite
 
 This is a plain Node.js/Express rewrite of your n8n workflow. Same logic, same Supabase tables, same Groq prompt, same randomized replies — just as code instead of visual nodes.
 
