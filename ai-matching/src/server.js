@@ -1,7 +1,7 @@
 import express from 'express';
 import { config } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
-import { markAsReadAndTyping } from './whatsapp.js';
+import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
 
 const app = express();
 app.use(express.json());
@@ -42,6 +42,15 @@ app.post('/webhook', async (req, res) => {
     }
 
     const phone = message.from;
+
+    if (message.type !== 'text') {
+      await sendWhatsAppMessage(
+        phone,
+        "I can only read text messages right now. Please type out your answer or send a link instead! 📝"
+      );
+      return;
+    }
+
     const messageText = message.text?.body || '';
 
     await handleIncomingMessage({ phone, messageText });
@@ -51,9 +60,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('Mahir bot is running.');
+  res.send('The bot is running.');
 });
 
 app.listen(config.port, () => {
-  console.log(`🚀 Mahir bot listening on port ${config.port}`);
+  console.log(`🚀 The bot listening on port ${config.port}`);
 });

@@ -1,11 +1,11 @@
 const questions = {
   welcome: [
-    "Hey! I'm Mahir 👋 Are you a Freelancer looking for work, or a Client looking to hire? (Type 'reset ai' anytime to start over)",
+    "Hey! I'm your assistant 👋 Are you a Freelancer looking for work, or a Client looking to hire? (Type 'reset ai' anytime to start over)",
     "Welcome! Let's get you sorted — Freelancer or Client? 🚀 (You can always type 'reset ai' to start fresh)",
     "Hi there! Quick one first: are you here to find work, or find someone to hire? (Type 'reset ai' anytime to restart)",
     "Hey, good to have you here 🙌 So — Freelancer looking for gigs, or Client looking to hire? (Type 'reset ai' if you ever want a clean start)",
     "Yo! Let's kick things off — Freelancer or Client, which one's you? 😎 (Type 'reset ai' anytime to reset)",
-    "Hi! I'm Mahir, your matchmaking assistant. Are you a Freelancer or a Client today? (Type 'reset ai' to start over anytime)",
+    "Hi! I'm your matchmaking assistant. Are you a Freelancer or a Client today? (Type 'reset ai' to start over anytime)",
   ],
   collect_role: [
     "Are you a Freelancer looking for work, or a Client looking to hire?",
@@ -99,8 +99,27 @@ const postCompletionReplies = [
   "No action needed — you're already registered. We'll ping you when something comes up!",
 ];
 
+const editVagueReplies = [
+  "Sure! Here is what we have so far:\n{LIST}\n\nWhat would you like to update?",
+  "No problem. Here's your current info:\n{LIST}\n\nWhich part do you want to change?",
+  "I can help with that! Here's what's saved:\n{LIST}\n\nWhat field are we editing?",
+];
+
+const editSpecificConfirmReplies = [
+  "Got it! What would you like your new {FIELD} to be?",
+  "Sure thing. Send over your new {FIELD} now.",
+  "Okay, let's update that. What's the new {FIELD}?",
+];
+
+const editSuccessReplies = [
+  "Done! I've updated your {FIELD} to: {VALUE}.",
+  "All set! Your {FIELD} is now: {VALUE}.",
+  "Successfully updated! {FIELD} -> {VALUE}.",
+];
+
+
 const alreadyRegisteredReply =
-  "You're already registered with Mahir! We'll reach out as soon as there's a match. (Type 'reset ai' if you'd like to start over)";
+  "You're already registered with our platform! We'll reach out as soon as there's a match. (Type 'reset ai' if you'd like to start over)";
 
 const resetReply = "Done! Your data's been wiped. Send 'Hi' whenever you're ready to start fresh. 👋";
 
@@ -135,3 +154,28 @@ export function isSkipMessage(text) {
   if (t === 'skip') return true;
   return ['skip this', 'no thanks', 'n/a', 'none', 'pass'].some((phrase) => t.includes(phrase));
 }
+
+function formatCurrentData(data) {
+  if (!data || Object.keys(data).length === 0) return "Nothing saved yet!";
+  return Object.entries(data)
+    .map(([k, v]) => `- *${k}*: ${v || 'Not provided'}`)
+    .join('\n');
+}
+
+export function pickEditVagueReply(currentData) {
+  const text = pickRandom(editVagueReplies);
+  return text.replace('{LIST}', formatCurrentData(currentData));
+}
+
+export function pickEditConfirmReply(field) {
+  const text = pickRandom(editSpecificConfirmReplies);
+  return text.replace(/\{FIELD\}/g, field.replace('_', ' '));
+}
+
+export function pickEditSuccessReply(field, value) {
+  const text = pickRandom(editSuccessReplies);
+  return text
+    .replace(/\{FIELD\}/g, field.replace('_', ' '))
+    .replace(/\{VALUE\}/g, value || 'Not provided');
+}
+

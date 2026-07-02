@@ -1,6 +1,6 @@
 import { config } from './config.js';
 
-const SYSTEM_PROMPT = `You are Mahir's data-extraction engine for a WhatsApp onboarding flow matching clients with freelancers.
+const SYSTEM_PROMPT = `You are the assistant's data-extraction engine for a WhatsApp onboarding flow matching clients with freelancers.
 
 CRITICAL RULE: You must ONLY respond with a valid JSON object. No other text.
 
@@ -8,12 +8,32 @@ JSON Schema:
 {
   "role": "freelancer" or "client" or null,
   "next_step": "the next step string",
-  "extracted_data": {}
+  "extracted_data": {
+    "deadline_date": "YYYY-MM-DD or null",
+    "availability_date": "YYYY-MM-DD or null"
+  },
+  "edit_request": {
+    "is_edit": true or false,
+    "target_field": "name of field to edit or null if vague",
+    "provided_value": "new value if provided in the message or null"
+  }
 }
 
 Rules:
 - ALWAYS preserve all existing keys/values in 'Collected Data So Far' into your 'extracted_data' output. Merge new data, never overwrite or delete old data.
 - Determine next_step and extracted_data using the flow below. Do NOT write any reply text.
+- If the user explicitly asks to change or edit a previously provided piece of info, set edit_request.is_edit to true. Determine the internal 'target_field' (e.g., 'rate', 'skills', 'budget_project', 'name'). If they provide the new value in the same message, put it in 'provided_value'. If vague, set target_field to null. If editing, keep next_step the same.
+
+Date Parsing Rules:
+- You will be given [TODAY'S DATE] in the user prompt.
+- When extracting a Client's 'deadline' or a Freelancer's 'availability', you must ALSO calculate the actual target calendar date and store it in 'deadline_date' or 'availability_date' (in YYYY-MM-DD format).
+- Use these sensible defaults for vague phrases:
+  - "this week" -> end of current week (upcoming Sunday)
+  - "next week" -> end of next week (Sunday of next week)
+  - "this month" -> last day of the current month
+  - "next month" -> last day of the next month
+  - "immediately", "asap", "now", "today" -> today's date
+- If the phrase is genuinely unparseable or lacks a time reference, leave the date field as null. Do not guess wildly.
 
 Onboarding Steps:
 
@@ -45,7 +65,9 @@ Fallback Rules:
 
 // Equivalent of "Groq AI Completion" + "Parse Groq JSON" nodes combined.
 export async function extractConversationData({ step, role, tempData, messageText }) {
+  const today = new Date().toISOString().split('T')[0];
   const userContent =
+    `[TODAY'S DATE]: ${today} | ` +
     `Current Step: ${step || 'welcome'} | ` +
     `Current Role: ${role || 'unknown'} | ` +
     `Collected Data So Far: ${JSON.stringify(tempData || {})} | ` +
@@ -87,5 +109,6 @@ export async function extractConversationData({ step, role, tempData, messageTex
     role: parsed.role || null,
     next_step: parsed.next_step || 'welcome',
     extracted_data: parsed.extracted_data || {},
+    edit_request: parsed.edit_request || { is_edit: false, target_field: null, provided_value: null },
   };
 }

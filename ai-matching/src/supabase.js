@@ -80,3 +80,12 @@ export async function saveFreelancerProfile(phone, data) {
   const { error } = await supabase.from('freelancers').insert(row);
   if (error) console.error('saveFreelancerProfile error:', error);
 }
+
+// --- Updates a single field for an already-completed freelancer ---
+export async function updateFreelancerField(phone, field, value) {
+  const { error } = await supabase
+    .from('freelancers')
+    .update({ [field]: value, updated_at: new Date().toISOString() })
+    .eq('phone', phone);
+  if (error) console.error(`updateFreelancerField (${field}) error:`, error);
+}
