@@ -99,3 +99,35 @@ From here on, every `git push` to your GitHub repo auto-redeploys — no manual 
 ## Step 9 — Supabase — no changes needed
 
 Same tables (`conversations`, `freelancers`), same columns, same `jsonb` `temp_data` column you already migrated to. Nothing to change on the Supabase side.
+
+
+
+
+
+
+## Changes by Qaim (qaimhussain/ai-matching)
+
+**Commit: Add ai-matching WhatsApp bot** (Jul 2, 2026)
+
+### AI / Conversation Logic
+- `src/groq.js` — Groq AI (Llama-3.3-70b-versatile) integration for parsing user replies and driving conversation state
+- `src/handlers/handleMessage.js` — Core message handling logic, including:
+  - Typing effect simulation before bot replies (mimics natural response delay)
+  - Skip option added for LinkedIn CV step in onboarding flow
+  - Routes incoming messages to correct step in onboarding based on conversation state
+
+### WhatsApp / API Integration
+- `src/whatsapp.js` — WhatsApp Business API integration for sending/receiving messages
+- `src/server.js` — Express server entry point, exposes webhook endpoint for incoming WhatsApp messages (REST API)
+- `src/replies.js` — Centralized reply templates and response formatting logic
+
+### Data Layer
+- `src/supabase.js` — Supabase client setup and query logic (conversations + freelancers tables)
+- `src/config.js` — Environment/config loader
+
+### Project Setup
+- `.env.example` — Environment variable template (API keys, Supabase URL, etc.)
+- `.gitignore` — Ignore rules for node_modules, .env, etc.
+- `package.json` / `package-lock.json` — Project dependencies
+
+**Stats:** 12 files changed, 1613 insertions(+)
