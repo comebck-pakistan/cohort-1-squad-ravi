@@ -1,7 +1,7 @@
 {
-  "name": "mahir-bot",
+  "name": "ai-matching-bot",
   "version": "1.0.0",
-  "description": "Mahir WhatsApp onboarding & matchmaking bot (Freelancer/Client) - code-first rewrite of the n8n workflow",
+  "description": "WhatsApp onboarding & matchmaking bot (Freelancer/Client) - code-first rewrite of the n8n workflow",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
