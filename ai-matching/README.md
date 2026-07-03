@@ -1,6 +1,21 @@
 # AI Matching Bot — Code-First Rewrite
 
-This is a plain Node.js/Express rewrite of your n8n workflow. Same logic, same Supabase tables, same Groq prompt, same randomized replies — just as code instead of visual nodes.
+This is a plain Node.js/Express rewrite of the original n8n workflow. Same logic, same Supabase tables, same Groq prompt, same randomized replies — just as code instead of visual nodes.
+
+## Changelog
+
+- **Typing effect** — bot now simulates a natural typing delay before sending replies, instead of responding instantly
+- **Skip option for LinkedIn/CV step** — users can now skip the LinkedIn/CV step during onboarding instead of being forced through it
+- **Reset flow fixed** — reset command ("reset ai") now correctly clears prior conversation/freelancer rows and restarts onboarding cleanly
+- **Conversation-state memory fixed** — bot previously failed to remember earlier onboarding steps and looped back to "Freelancer or Client?"; this is now fixed, so the bot correctly progresses through each step using saved conversation state
+- **Randomized question phrasing** — each onboarding step now pulls from multiple pre-written variants of the same question at random, so the conversation feels more natural and less scripted/repetitive
+- **Natural post-completion replies** — after a profile is marked complete, follow-up messages like "perfect," "thanks," or similar acknowledgements now get a natural, varied response instead of repeating the setup-complete message again
+- **Unsupported file type handling** — if a user sends an image, audio, video, or any non-text message, the bot replies letting them know that format isn't supported and asks them to send a text message or link instead
+- **Edit-info flow** — users can now update their name, rate, budget, deadline, portfolio, or any other saved field at any point — mid-onboarding or after profile completion — by typing things like "edit my info," "change my rate," or "change my deadline." Works for both Freelancers and Clients, across every field currently collected. The bot asks a natural follow-up to confirm the new value, updates only that field, and resumes wherever the user left off.
+- **Natural-language deadline parsing** — the bot now understands phrases like "this week," "in 2 days," "next month," "asap," etc. and automatically calculates the actual target date (`deadline_date` / `availability_date`), instead of only storing the raw text
+- **`updated_at` column fix** — fixed a Supabase error where the `freelancers` table was missing the `updated_at` column, which was blocking field updates
+- **markAsReadAndTyping error fix** — WhatsApp's API occasionally returns a "message does not exist" error (code 100) on duplicate/late webhook events; this is now caught and logged quietly instead of throwing an error
+- Additional bug fixes, UX improvements, and conversation flow refinements
 
 ## What each file does
 
@@ -22,7 +37,7 @@ node -v
 npm -v
 ```
 
-## Step 2 — Open the project in Antigravity
+## Step 2 — Open the project in your IDE
 
 Open the project folder as your project root. That's it — it's a normal Node.js project, no special config needed for any IDE.
 
