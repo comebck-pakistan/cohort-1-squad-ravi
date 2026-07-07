@@ -9,7 +9,11 @@ JSON Schema:
   "role": "freelancer" or "client" or null,
   "next_step": "the next step string",
   "extracted_data": {
-    "deadline_date": "YYYY-MM-DD or null",
+    "deadline": "verbatim deadline/timeline text from user",
+    "deadline_raw": "user's exact words (same as deadline)",
+    "deadline_normalized": "clean version: e.g. 'every week', '2026-07-15', '3 weeks'",
+    "is_recurring": true or false,
+    "deadline_date": "YYYY-MM-DD or null (best-effort, never blocks advancement)",
     "availability_date": "YYYY-MM-DD or null"
   },
   "edit_request": {
@@ -23,17 +27,18 @@ Rules:
 - ALWAYS preserve all existing keys/values in 'Collected Data So Far' into your 'extracted_data' output. Merge new data, never overwrite or delete old data.
 - Determine next_step and extracted_data using the flow below. Do NOT write any reply text.
 - If the user explicitly asks to change or edit a previously provided piece of info, set edit_request.is_edit to true. Determine the internal 'target_field' (e.g., 'rate', 'skills', 'budget_project', 'name'). If they provide the new value in the same message, put it in 'provided_value'. If vague, set target_field to null. If editing, keep next_step the same.
-
+- CRITICAL EDIT RULE: Short acknowledgement/filler words (e.g., "ok", "perf", "thanks", "great", "cool", "nice", "got it", emojis) with no actual new value or explicit field reference MUST NEVER be classified as an edit request. Set edit_request.is_edit to false for these.
 Date Parsing Rules:
 - You will be given [TODAY'S DATE] in the user prompt.
-- When extracting a Client's 'deadline' or a Freelancer's 'availability', you must ALSO calculate the actual target calendar date and store it in 'deadline_date' or 'availability_date' (in YYYY-MM-DD format).
-- Use these sensible defaults for vague phrases:
+- When extracting a Client's 'deadline' or a Freelancer's 'availability', store the user's raw text verbatim in 'deadline' or 'availability'. Additionally, if you can compute a concrete calendar date, store it in 'deadline_date' or 'availability_date' (YYYY-MM-DD). That calculated date is OPTIONAL and best-effort — it must NEVER block step advancement.
+- Sensible calendar-date defaults (only when a concrete date is calculable):
   - "this week" -> end of current week (upcoming Sunday)
   - "next week" -> end of next week (Sunday of next week)
   - "this month" -> last day of the current month
   - "next month" -> last day of the next month
   - "immediately", "asap", "now", "today" -> today's date
-- If the phrase is genuinely unparseable or lacks a time reference, leave the date field as null. Do not guess wildly.
+- Recurring or relative durations like "weekly", "every week", "every 2 weeks", "monthly", "in 3 days", "2 weeks" ARE valid deadline/availability answers. Store them verbatim and leave deadline_date/availability_date as null. Advance the step normally.
+- ONLY leave 'deadline'/'availability' blank AND re-ask (keep next_step the same) if the user's message has NO time or duration reference at all (e.g. pure chit-chat with zero timeline content).
 
 Onboarding Steps:
 
@@ -41,23 +46,31 @@ Onboarding Steps:
 
 2. collect_role
    - If Freelancer: role='freelancer', next_step='collect_name'.
-   - If Client: role='client', next_step='collect_project'.
+   - If Client: role='client', next_step='collect_name'.
+
+3. collect_name: extract 'name'. 
+   - If role='freelancer' next_step='collect_profile_link'. 
+   - If role='client' next_step='collect_project'.
 
 === FREELANCER FLOW ===
-3. collect_name: extract 'name'. next_step: collect_profile_link.
 4. collect_profile_link: extract 'profile_link' (any URL/cloud link). next_step: collect_portfolio.
 5. collect_portfolio: extract 'portfolio' (any URL). next_step: collect_skills.
 6. collect_skills: extract 'skills' and 'tools'. next_step: collect_rate.
 7. collect_rate: extract 'rate' (hourly rate). next_step: collect_availability.
 8. collect_availability: extract 'availability'. next_step: collect_preferences.
-9. collect_preferences: extract 'preferences'. next_step: completed.
+9. collect_preferences: extract 'preferences'. next_step: collect_freelancer_brief_desc.
+9a. collect_freelancer_brief_desc: extract EXACTLY the raw text of the user's message into 'brief_description'. Do not try to extract structured fields. next_step: completed.
 
 === CLIENT FLOW ===
 10. collect_project: extract WHATEVER the client says as 'project_description' (even a short single sentence). next_step: collect_hire_type.
 11. collect_hire_type: extract 'hire_type' as exactly 'full-time' or 'project-based' based on user's answer. If full-time: next_step='collect_budget_fulltime'. If project-based: next_step='collect_budget_project'.
 12. collect_budget_fulltime: extract 'budget_hourly' (their expected hourly rate budget). next_step: collect_deadline.
 13. collect_budget_project: extract 'budget_project' (project budget) and 'project_count' (how many projects, default 1 if unclear). next_step: collect_deadline.
-14. collect_deadline: extract 'deadline' (timeline/when they need it done). next_step: completed.
+14. collect_deadline: extract 'deadline' (timeline/when they need it done). Accept ANY reasonable answer: a date ("July 15"), a duration ("2 weeks", "week"), a recurring cadence ("weekly", "every week"), or a relative phrase ("asap", "this month"). Store the raw user text in 'deadline'. Always advance next_step to 'collect_client_brief_desc' as long as the message contains any time/duration/frequency reference. Only re-ask if the message has zero time reference.
+14a. collect_client_brief_desc: extract EXACTLY the raw text of the user's message into 'brief_description'. Do not try to extract structured fields. next_step: completed.
+
+CRITICAL DATA COLLECTION RULE (overrides ALL edit detection):
+- Steps collect_freelancer_brief_desc, collect_client_brief_desc, and collect_project are PURE DATA COLLECTION steps. The user's ENTIRE message is their answer to the current question. No matter what words appear in the message (including words like "edit", "change", "update", "actually"), you MUST set edit_request.is_edit = false and extract the full message as the field value. These steps NEVER produce an edit request.
 
 Fallback Rules:
 - If user chit-chats, keep next_step the same (re-ask for current step's data).
@@ -105,10 +118,43 @@ export async function extractConversationData({ step, role, tempData, messageTex
     parsed = JSON.parse(cleaned);
   }
 
+  // ── DEBUG: log the RAW Groq extraction before any merging ──────────────
+  console.log(
+    `[groq] RAW extraction (step=${step || 'welcome'}):\n`,
+    JSON.stringify(parsed, null, 2),
+  );
+
+  // ── Normalise common key-name variations in extracted_data ─────────────
+  // Groq occasionally uses synonyms for the canonical keys our code expects.
+  const KEY_ALIASES = {
+    full_name:           'name',
+    user_name:           'name',
+    username:            'name',
+    description:         'brief_description',
+    brief_desc:          'brief_description',
+    project_brief:       'brief_description',
+    type:                'hire_type',
+    hiring_type:         'hire_type',
+    employment_type:     'hire_type',
+    budget:              'budget_project',
+    hourly_rate:         'rate',
+    project_type:        'hire_type',
+  };
+
+  const rawExtracted = parsed.extracted_data || {};
+  const normalised = {};
+  for (const [key, value] of Object.entries(rawExtracted)) {
+    const canonical = KEY_ALIASES[key] || key;
+    // Only map if the canonical key isn't already explicitly set
+    if (normalised[canonical] === undefined) {
+      normalised[canonical] = value;
+    }
+  }
+
   return {
     role: parsed.role || null,
     next_step: parsed.next_step || 'welcome',
-    extracted_data: parsed.extracted_data || {},
+    extracted_data: normalised,
     edit_request: parsed.edit_request || { is_edit: false, target_field: null, provided_value: null },
   };
 }

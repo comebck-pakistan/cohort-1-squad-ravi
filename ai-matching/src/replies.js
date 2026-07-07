@@ -38,10 +38,7 @@ const questions = {
     "What's the project budget, and how many projects should I expect?",
   ],
   collect_deadline: [
-    "Last one — when do you need this done by? ⏰",
-    "Almost there — what's your deadline or timeline?",
-    "When are you hoping to have this completed?",
-    "What's your target timeline for this?",
+    "Almost there! What's your deadline or timeline? ⏰ (e.g. \"2 weeks\", \"July 15\", \"weekly\")",
   ],
   collect_name: [
     "Great! What's your full name? ✍️",
@@ -85,12 +82,168 @@ const questions = {
     "Last one! Any preference on project type or where your clients are based?",
     "Wrapping up — got any preferences on project type or client location?",
   ],
+};
+
+// ── Niche-aware preferences variants ────────────────────────────────────────
+// Each entry: { niche, keywords (matched against temp_data), messages[] }
+const PREFERENCE_VARIANTS = [
+  {
+    niche: 'video_editing',
+    keywords: ['video', 'edit', 'editing', 'premiere', 'after effects', 'davinci', 'final cut', 'motion graphics', 'vfx', 'animation'],
+    messages: [
+      "Last one! 🎯 Since you're into video editing — got a niche or client type you vibe with? (e.g. \"YouTube long-form, short-form reels\" or \"English-speaking clients\") — or just say 'open to anything'",
+      "Almost done! 🎬 Any preference on the type of video work or clients you'd love? (e.g. \"music videos, corporate\", \"US-based brands\") — or say 'no preference' if you're down for whatever",
+    ],
+  },
+  {
+    niche: 'web_dev',
+    keywords: ['web', 'website', 'frontend', 'front-end', 'backend', 'back-end', 'fullstack', 'full-stack', 'react', 'next', 'node', 'developer', 'wordpress', 'shopify', 'html', 'css', 'javascript', 'typescript', 'php', 'laravel'],
+    messages: [
+      "Last one! 💻 Since you're in web dev — any niche or client type you prefer? (e.g. \"e-commerce stores\", \"SaaS startups\", \"US/EU clients\") — or just say 'open to anything'",
+      "Almost there! 🌐 Got a preference for the type of web projects or clients? (e.g. \"landing pages for agencies\", \"full-stack apps\") — or say 'no preference' and we'll match you broadly",
+    ],
+  },
+  {
+    niche: 'graphic_design',
+    keywords: ['logo', 'design', 'graphic', 'branding', 'illustrat', 'photoshop', 'figma', 'canva', 'ui', 'ux', 'poster', 'flyer', 'packaging', 'brand identity'],
+    messages: [
+      "Last one! 🎨 Since you're into design — any niche or client type you'd prefer? (e.g. \"tech startup branding\", \"packaging for DTC brands\") — or just say 'open to anything'",
+      "Almost done! ✏️ Got a preference for design work or client type? (e.g. \"social media graphics\", \"European agencies\") — or say 'no preference' if you're flexible",
+    ],
+  },
+  {
+    niche: 'content_writing',
+    keywords: ['writing', 'writer', 'content', 'copywriting', 'copy', 'blog', 'article', 'seo', 'ghostwrit', 'script', 'email'],
+    messages: [
+      "Last one! ✍️ Since you're a writer — any content niche or client type you vibe with? (e.g. \"tech blogs\", \"email sequences for e-com\", \"English-speaking startups\") — or say 'open to anything'",
+      "Almost there! 📝 Got a preference on the type of writing or clients? (e.g. \"SaaS landing pages\", \"health & wellness blogs\") — or say 'no preference' if you're down for all kinds",
+    ],
+  },
+  {
+    niche: 'social_media',
+    keywords: ['social media', 'smm', 'instagram', 'tiktok', 'twitter', 'linkedin', 'facebook', 'community', 'influencer', 'growth', 'engagement', 'scheduling'],
+    messages: [
+      "Last one! 📱 Since you're in social media — any platform or client niche you prefer? (e.g. \"TikTok for DTC brands\", \"LinkedIn for B2B\") — or just say 'open to anything'",
+      "Almost done! 🚀 Got a preference on social media niche or client type? (e.g. \"Instagram growth for restaurants\", \"content calendars for coaches\") — or say 'no preference'",
+    ],
+  },
+  {
+    niche: 'virtual_assistant',
+    keywords: ['virtual assistant', ' va ', 'admin', 'data entry', 'scheduling', 'bookkeeping', 'customer support', 'customer service', 'inbox', 'calendar'],
+    messages: [
+      "Last one! 📋 Since you're in the VA space — any industry or task type you'd prefer? (e.g. \"real estate admin\", \"e-com customer support\", \"US-based entrepreneurs\") — or say 'open to anything'",
+      "Almost there! 🗂️ Got a preference for the kind of VA work or clients? (e.g. \"exec calendar management\", \"Shopify order processing\") — or say 'no preference' if you're flexible",
+    ],
+  },
+  {
+    niche: 'ugc_ads',
+    keywords: ['ugc', 'ad ', 'ads', 'creative', 'tiktok ad', 'meta ad', 'facebook ad', 'performance', 'paid media', 'user generated', 'ugc creator', 'spark ad'],
+    messages: [
+      "Last one! 🎥 Since you're into UGC / ad creation — any niche or brand type you prefer? (e.g. \"beauty & skincare UGC\", \"tech product demos\", \"US DTC brands\") — or say 'open to anything'",
+      "Almost done! 🔥 Got a preference on the type of ads or clients? (e.g. \"TikTok spark ads for fashion\", \"Meta ads for SaaS\") — or say 'no preference' and we'll cast a wide net",
+    ],
+  },
+  {
+    niche: 'mobile_dev',
+    keywords: ['mobile', 'app', 'ios', 'android', 'flutter', 'react native', 'swift', 'kotlin'],
+    messages: [
+      "Last one! 📲 Since you're into mobile dev — any platform or client niche you prefer? (e.g. \"iOS fintech apps\", \"cross-platform MVPs for startups\") — or say 'open to anything'",
+      "Almost there! 🛠️ Got a preference on the type of mobile projects? (e.g. \"Android e-commerce\", \"Flutter prototypes\") — or say 'no preference' if you're flexible",
+    ],
+  },
+  {
+    niche: 'data_analytics',
+    keywords: ['data', 'analytics', 'dashboard', 'excel', 'sql', 'python', 'tableau', 'power bi', 'analysis', 'machine learning', 'ml', 'ai '],
+    messages: [
+      "Last one! 📊 Since you're into data — any industry or project type you prefer? (e.g. \"marketing analytics for e-com\", \"financial dashboards\") — or say 'open to anything'",
+      "Almost done! 🔢 Got a preference on the kind of data work or clients? (e.g. \"startup KPI dashboards\", \"ML pipelines for healthtech\") — or say 'no preference'",
+    ],
+  },
+  {
+    niche: 'catchall',
+    keywords: [],
+    messages: [
+      "Final question: any preferences on project type or client geography? 🌍 (e.g. \"e-commerce projects\", \"US-based startups\") — or just say 'open to anything'",
+      "Almost done — any project types or regions you prefer working with? 🎯 (e.g. \"tech companies\", \"European clients\") — or say 'no preference' if you're flexible",
+      "Last one! Any preference on what kind of projects or clients you'd love to work with? (e.g. \"creative agencies\", \"remote-first teams\") — or say 'open to anything' 🚀",
+      "Wrapping up — got any preferences on project type or client location? 🌐 (e.g. \"SaaS products\", \"MENA-based brands\") — or say 'no preference'",
+    ],
+  },
+];
+
+/**
+ * Scans text fields in temp_data for keyword hits and returns the matching niche name,
+ * or null if nothing matches.
+ */
+function detectNiche(tempData) {
+  if (!tempData) return null;
+
+  // Build a single searchable string from all text fields collected so far
+  const searchable = [
+    tempData.project_description,
+    tempData.brief_description,
+    tempData.skills,
+    tempData.tools,
+    tempData.name, // sometimes people put "Video Editor Jo" as their name
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (!searchable) return null;
+
+  for (const variant of PREFERENCE_VARIANTS) {
+    if (variant.niche === 'catchall') continue; // skip catchall during matching
+    for (const kw of variant.keywords) {
+      if (searchable.includes(kw.toLowerCase())) {
+        return variant.niche;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Smart preferences reply picker.
+ * 1. Keyword-match temp_data → pick a random message from that niche's bank
+ * 2. No match → pick a random message from ALL variants (including catchall)
+ *
+ * @param {object} tempData  The conversation's current temp_data
+ * @returns {string}         The reply text
+ */
+export function pickPreferencesReply(tempData) {
+  const niche = detectNiche(tempData);
+
+  if (niche) {
+    const matched = PREFERENCE_VARIANTS.find((v) => v.niche === niche);
+    if (matched) {
+      console.log(`[replies] Preferences niche detected: ${niche}`);
+      return pickRandom(matched.messages);
+    }
+  }
+
+  // Fallback: pick from every variant's messages combined
+  const allMessages = PREFERENCE_VARIANTS.flatMap((v) => v.messages);
+  console.log('[replies] No niche detected — using random preferences variant');
+  return pickRandom(allMessages);
+}
+
+// ── Re-open the questions object to avoid breaking existing references ───────
+// (The object was closed above so we could define PREFERENCE_VARIANTS inline.
+//  We continue the remaining question definitions here by merging them in.)
+Object.assign(questions, {
+  collect_freelancer_brief_desc: [
+    "Lastly, give me a brief description of yourself, what you do, and who you want to match up with, in your own words.",
+  ],
+  collect_client_brief_desc: [
+    "Lastly, give me a brief description of your project, in your own words.",
+  ],
   completed: [
     'All done! 🎉 Your profile is officially saved.',
     "You're all set! 🙌 Everything is saved and good to go. 🚀",
     "Perfect! Your details are recorded. We'll be in touch!",
   ],
-};
+});
 
 const postCompletionReplies = [
   "You're all set! 🙌 We'll reach out as soon as there's a match.",
