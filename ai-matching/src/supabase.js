@@ -61,24 +61,64 @@ export async function saveConversation({ id, phone, role, step, temp_data }) {
 export async function resetUser(phone) {
   await supabase.from('conversations').delete().eq('phone', phone);
   await supabase.from('freelancers').delete().eq('phone', phone);
+  await supabase.from('job_requests').delete().eq('phone', phone);
 }
 
-// --- Equivalent of "Save Freelancer Profile" node ---
+// --- Save / upsert a completed freelancer profile ---
+// Only writes the 4 columns that actually exist in the `freelancers` table.
+// Uses upsert (conflict on `phone`) so re-runs are safe and don't duplicate rows.
 export async function saveFreelancerProfile(phone, data) {
   const row = {
     phone,
-    name: data.name || null,
-    profile_link: data.profile_link || null,
-    portfolio: data.portfolio || null,
-    skills: data.skills || null,
-    tools: data.tools || null,
-    rate: data.rate || null,
-    availability: data.availability || null,
-    preferences: data.preferences || null,
-    created_at: new Date().toISOString(),
+    name:              data.name              || null,
+    profile_link:      data.profile_link      || null,
+    brief_description: data.brief_description || null,
   };
-  const { error } = await supabase.from('freelancers').insert(row);
-  if (error) console.error('saveFreelancerProfile error:', error);
+
+  console.log('[supabase] saveFreelancerProfile — upserting row:', JSON.stringify(row));
+
+  const { data: upserted, error } = await supabase
+    .from('freelancers')
+    .upsert(row, { onConflict: 'phone' })
+    .select();
+
+  if (error) {
+    console.error('[supabase] saveFreelancerProfile FAILED:', JSON.stringify(error));
+  } else {
+    console.log('[supabase] saveFreelancerProfile OK — row id:', upserted?.[0]?.id);
+  }
+}
+
+// --- Save / upsert a completed client job request ---
+// Writes all client-collected fields into the `job_requests` table.
+// Uses upsert (conflict on `phone`) so re-runs are safe.
+export async function saveJobRequest(phone, data) {
+  const row = {
+    phone,
+    name:                data.name                || null,
+    project_description: data.project_description || null,
+    hire_type:           data.hire_type           || null,
+    budget_project:      data.budget_project       || null,
+    budget_hourly:       data.budget_hourly        || null,
+    project_count:       data.project_count        || null,
+    deadline:            data.deadline             || null,
+    deadline_normalized: data.deadline_normalized  || null,
+    is_recurring:        data.is_recurring         ?? null,
+    brief_description:   data.brief_description    || null,
+  };
+
+  console.log('[supabase] saveJobRequest — upserting row:', JSON.stringify(row));
+
+  const { data: upserted, error } = await supabase
+    .from('job_requests')
+    .upsert(row, { onConflict: 'phone' })
+    .select();
+
+  if (error) {
+    console.error('[supabase] saveJobRequest FAILED:', JSON.stringify(error));
+  } else {
+    console.log('[supabase] saveJobRequest OK — row id:', upserted?.[0]?.id);
+  }
 }
 
 // --- Updates a single field for an already-completed freelancer ---
@@ -87,5 +127,5 @@ export async function updateFreelancerField(phone, field, value) {
     .from('freelancers')
     .update({ [field]: value, updated_at: new Date().toISOString() })
     .eq('phone', phone);
-  if (error) console.error(`updateFreelancerField (${field}) error:`, error);
+  if (error) console.error(`[supabase] updateFreelancerField (${field}) error:`, JSON.stringify(error));
 }
