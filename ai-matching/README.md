@@ -4,7 +4,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
  
 ---
  
-## Changelog
+## Changelog by Qaim
  
 ### Deadline & Timeline Parsing
 - Rebuilt deadline extraction to understand any phrasing style, not just hardcoded keywords — covers specific dates (e.g. "July 15"), relative durations (e.g. "2 weeks", "3 days"), and recurring patterns (e.g. "weekly", "every week")
