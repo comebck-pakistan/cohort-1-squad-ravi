@@ -37,6 +37,17 @@ function ScoreRing({ score, size = 80 }: { score: number; size?: number }) {
   );
 }
 
+function lifecycleLabel(status: string | null | undefined) {
+  return (status || 'matched').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function lifecycleVariant(status: string | null | undefined): 'success' | 'cyan' | 'destructive' | 'secondary' {
+  if (status === 'hired' || status === 'completed' || status === 'mutual_interest') return 'success';
+  if (status === 'shortlisted') return 'cyan';
+  if (status === 'declined') return 'destructive';
+  return 'secondary';
+}
+
 export default function MatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: match, isLoading } = useMatchById(id);
@@ -103,6 +114,7 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
                 <h1 className="font-display text-2xl font-bold text-white mb-1">{match.freelancer?.name ?? 'Anonymous'}</h1>
                 <p className="text-white/50 text-sm mb-3">{skills.slice(0, 3).join(' · ')}</p>
                 <div className="flex flex-wrap gap-2">
+                  <Badge variant={lifecycleVariant(match.status)} className="text-xs">{lifecycleLabel(match.status)}</Badge>
                   {skills.map(s => <Badge key={s} variant="default" className="text-xs">{s}</Badge>)}
                 </div>
               </div>
@@ -129,6 +141,17 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
               <div>
                 <div className="text-xs text-white/30 mb-1">Trust</div>
                 <Badge variant={trustScore >= 55 ? 'success' : trustScore >= 35 ? 'warning' : 'secondary'}>{trustScore}/100</Badge>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+                <div className="text-xs text-white/30 mb-1">Freelancer status</div>
+                <div className="text-sm font-medium text-white">{lifecycleLabel(match.freelancer_status)}</div>
+              </div>
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+                <div className="text-xs text-white/30 mb-1">Client status</div>
+                <div className="text-sm font-medium text-white">{lifecycleLabel(match.client_status)}</div>
               </div>
             </div>
           </CardContent>

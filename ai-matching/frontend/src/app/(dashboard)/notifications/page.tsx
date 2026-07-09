@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Bell, Star, User, Brain, Clock, Check, CheckCheck } from 'lucide-react';
+import { Bell, Star, User, Brain, Clock, CheckCheck } from 'lucide-react';
 import { useAuthContext } from '@/components/auth/auth-provider';
 import { useNotifications, useMarkNotificationRead, useMarkAllRead } from '@/hooks/useNotifications';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,6 +13,7 @@ import { Notification } from '@/types';
 
 const TYPE_CONFIG = {
   new_match: { icon: Star, color: 'text-violet-400', bg: 'bg-violet-500/10 border-violet-500/20', label: 'New Match' },
+  match_status: { icon: CheckCheck, color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', label: 'Match Status' },
   profile_update: { icon: User, color: 'text-cyan-400', bg: 'bg-cyan-500/10 border-cyan-500/20', label: 'Profile' },
   ai_recommendation: { icon: Brain, color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20', label: 'AI Tip' },
   deadline: { icon: Clock, color: 'text-rose-400', bg: 'bg-rose-500/10 border-rose-500/20', label: 'Deadline' },

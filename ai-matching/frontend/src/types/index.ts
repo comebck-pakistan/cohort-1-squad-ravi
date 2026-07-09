@@ -61,6 +61,9 @@ export interface Match {
   id: string;
   freelancer_phone: string;
   client_phone: string;
+  status: 'matched' | 'shortlisted' | 'mutual_interest' | 'hired' | 'completed' | 'declined' | string;
+  freelancer_status: 'pending' | 'interested' | 'shortlisted' | 'hired' | 'completed' | 'declined' | string;
+  client_status: 'pending' | 'interested' | 'shortlisted' | 'hired' | 'completed' | 'declined' | string;
   compatibility_score: number;
   trust_score: number | null;
   total_score: number | null;
@@ -70,6 +73,10 @@ export interface Match {
   ai_explanation: string;
   potential_risks: string;
   recommended_action: string;
+  freelancer_responded_at: string | null;
+  client_responded_at: string | null;
+  hired_at: string | null;
+  completed_at: string | null;
   created_at: string;
   freelancer?: FreelancerProfile;
   client?: ClientProfile;
@@ -78,7 +85,7 @@ export interface Match {
 export interface Notification {
   id: string;
   phone: string;
-  type: 'new_match' | 'profile_update' | 'ai_recommendation' | 'deadline' | 'system';
+  type: 'new_match' | 'match_status' | 'profile_update' | 'ai_recommendation' | 'deadline' | 'system';
   title: string;
   body: string;
   read: boolean;

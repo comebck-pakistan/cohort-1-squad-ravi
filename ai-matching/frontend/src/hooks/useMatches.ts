@@ -13,7 +13,7 @@ export function useMatches(phone: string | null, role: 'freelancer' | 'client' |
       const field = role === 'freelancer' ? 'freelancer_phone' : 'client_phone';
       const { data, error } = await supabase
         .from('matches')
-        .select('*, freelancer:freelancers(*)')
+        .select('*, freelancer:freelancers(*), client:job_requests(*)')
         .eq(field, phone)
         .order('total_score', { ascending: false, nullsFirst: false })
         .order('compatibility_score', { ascending: false });
@@ -31,7 +31,7 @@ export function useMatchById(id: string | null) {
       if (!id) return null;
       const { data, error } = await supabase
         .from('matches')
-        .select('*, freelancer:freelancers(*)')
+        .select('*, freelancer:freelancers(*), client:job_requests(*)')
         .eq('id', id)
         .single();
       if (error) throw error;

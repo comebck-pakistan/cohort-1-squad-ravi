@@ -256,6 +256,37 @@ export async function findMatchById(id) {
   return data;
 }
 
+export async function updateMatchLifecycle(id, patch) {
+  const { data, error } = await supabase
+    .from('matches')
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) {
+    console.error('[supabase] updateMatchLifecycle FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data;
+}
+
+export async function upsertMatchFeedback(row) {
+  const stamped = {
+    ...row,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('match_feedback')
+    .upsert(stamped, { onConflict: 'match_id,phone' })
+    .select()
+    .single();
+  if (error) {
+    console.error('[supabase] upsertMatchFeedback FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data;
+}
+
 export async function findPendingContactRequest({ matchId, requesterPhone, targetPhone }) {
   const { data, error } = await supabase
     .from('contact_requests')
@@ -286,6 +317,20 @@ export async function findLatestPendingContactApproval(targetPhone) {
     return null;
   }
   return data && data.length > 0 ? data[0] : null;
+}
+
+export async function getPendingContactRequestsForTarget(targetPhone) {
+  const { data, error } = await supabase
+    .from('contact_requests')
+    .select('*')
+    .eq('target_phone', targetPhone)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('[supabase] getPendingContactRequestsForTarget FAILED:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
 }
 
 export async function createContactRequest(row) {

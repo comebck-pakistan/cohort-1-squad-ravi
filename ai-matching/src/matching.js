@@ -22,6 +22,7 @@ import {
   upsertMatches,
   insertNotifications,
   replaceInsights,
+  getRankedMatchesForPhone,
   supabase,
 } from './supabase.js';
 import { generateMatchAnalyses } from './groq.js';
@@ -282,6 +283,12 @@ function hiddenContactNote(profile, roleLabel) {
   return `🔒 ${roleLabel} contact is private for now.\n`;
 }
 
+async function rankForMatch(phone, role, matchId) {
+  const matches = await getRankedMatchesForPhone(phone, role);
+  const index = matches.findIndex((m) => String(m.id) === String(matchId));
+  return index >= 0 ? index + 1 : null;
+}
+
 function scoreFreelancersForJob(job, freelancers) {
   return freelancers
     .filter((f) => f.phone !== job.phone)
@@ -331,7 +338,8 @@ export async function runMatchingForClient(clientPhone) {
   }
 
   const analysed = await attachAnalyses(job, top);
-  await upsertMatches(analysed.map((c) => toMatchRow(job, c)));
+  const writtenMatches = await upsertMatches(analysed.map((c) => toMatchRow(job, c)));
+  const writtenByFreelancer = new Map(writtenMatches.map((m) => [m.freelancer_phone, m]));
 
   // In-app notifications for both sides
   const projectLine = shortProjectLine(job);
@@ -361,16 +369,21 @@ export async function runMatchingForClient(clientPhone) {
     .join('\n\n');
   await sendWhatsAppMessage(
     clientPhone,
-    `🎯 Great news${job.name ? `, ${job.name}` : ''}! I found ${analysed.length} freelancer${analysed.length > 1 ? 's' : ''} for your project:\n\n${list}\n\nUse direct contact links where shown. For hidden contacts, reply with the request command and I'll ask them first. 🤝`
+    `🎯 Great news${job.name ? `, ${job.name}` : ''}! I found ${analysed.length} freelancer${analysed.length > 1 ? 's' : ''} for your project:\n\n${list}\n\nUse direct contact links where shown. For hidden contacts, reply with the request command and I'll ask them first.\n\nNext steps: reply "shortlist 1", "hire 1", "decline 1", or "useful 1 yes/no". 🤝`
   );
 
   // ...and a heads-up to each matched freelancer. These can fail if the
   // freelancer hasn't messaged in 24h (Meta's messaging window) — that's
   // logged inside sendWhatsAppMessage and shouldn't stop the loop.
   for (const c of analysed) {
+    const row = writtenByFreelancer.get(c.freelancer.phone);
+    const rank = row ? await rankForMatch(c.freelancer.phone, 'freelancer', row.id) : null;
+    const actionHint = rank
+      ? `\n\nReply "interested ${rank}" if you want this project, or "decline ${rank}" if it's not a fit.`
+      : '\n\nReply "show my matches" to see and update this match.';
     await sendWhatsAppMessage(
       c.freelancer.phone,
-      `🎉 New project match, ${c.freelancer.name || 'there'}!\n\n*${job.name || 'A client'}* needs: ${projectLine}\n${job.budget_project || job.budget_hourly ? `💰 Budget: ${job.budget_project || job.budget_hourly}\n` : ''}${job.deadline ? `⏰ Timeline: ${job.deadline}\n` : ''}${hiddenContactNote(job, 'Client')}It's a ${c.score}% skill match with your profile. ${c.freelancer.contact_sharing_allowed === true ? "I've shared your contact with the client, so they may reach out here on WhatsApp soon!" : "I have not shared your contact; if the client asks for it, I'll request your approval first."}`
+      `🎉 New project match, ${c.freelancer.name || 'there'}!\n\n*${job.name || 'A client'}* needs: ${projectLine}\n${job.budget_project || job.budget_hourly ? `💰 Budget: ${job.budget_project || job.budget_hourly}\n` : ''}${job.deadline ? `⏰ Timeline: ${job.deadline}\n` : ''}${hiddenContactNote(job, 'Client')}It's a ${c.score}% skill match with your profile. ${c.freelancer.contact_sharing_allowed === true ? "I've shared your contact with the client, so they may reach out here on WhatsApp soon!" : "I have not shared your contact; if the client asks for it, I'll request your approval first."}${actionHint}`
     );
   }
 }
@@ -465,7 +478,7 @@ export async function runMatchingForFreelancer(freelancerPhone) {
     .join('\n');
   await sendWhatsAppMessage(
     freelancerPhone,
-    `🎯 Good news, ${freelancer.name || 'there'}! Your profile already matches ${analysed.length} open project${analysed.length > 1 ? 's' : ''}:\n\n${list}\n\nI've notified the client${analysed.length > 1 ? 's' : ''} about you — keep an eye on WhatsApp! 🤝`
+    `🎯 Good news, ${freelancer.name || 'there'}! Your profile already matches ${analysed.length} open project${analysed.length > 1 ? 's' : ''}:\n\n${list}\n\nI've notified the client${analysed.length > 1 ? 's' : ''} about you. Reply "interested 1", "decline 1", "request contact 1", or "useful 1 yes/no". 🤝`
   );
 }
 

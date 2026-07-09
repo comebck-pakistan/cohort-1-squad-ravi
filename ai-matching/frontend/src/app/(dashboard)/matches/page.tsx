@@ -35,6 +35,17 @@ function ScoreRing({ score, size = 56 }: { score: number; size?: number }) {
   );
 }
 
+function lifecycleLabel(status: string | null | undefined) {
+  return (status || 'matched').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function lifecycleVariant(status: string | null | undefined): 'success' | 'cyan' | 'destructive' | 'secondary' {
+  if (status === 'hired' || status === 'completed' || status === 'mutual_interest') return 'success';
+  if (status === 'shortlisted') return 'cyan';
+  if (status === 'declined') return 'destructive';
+  return 'secondary';
+}
+
 function MatchCard({ match }: { match: Match }) {
   const skills = parseSkills(match.freelancer?.skills ?? null);
   const overallScore = match.total_score ?? match.compatibility_score;
@@ -61,7 +72,10 @@ function MatchCard({ match }: { match: Match }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2 mb-1">
                 <h3 className="font-semibold text-white text-sm truncate">{match.freelancer?.name ?? 'Anonymous'}</h3>
-                <Badge variant={confidenceVariant} className="text-xs flex-shrink-0">{confidenceLabel} confidence</Badge>
+                <div className="flex flex-wrap justify-end gap-1.5 flex-shrink-0">
+                  <Badge variant={lifecycleVariant(match.status)} className="text-xs">{lifecycleLabel(match.status)}</Badge>
+                  <Badge variant={confidenceVariant} className="text-xs">{confidenceLabel}</Badge>
+                </div>
               </div>
               <p className="text-xs text-white/40 mb-3 line-clamp-1">{match.ai_explanation || 'AI match based on skills and preferences'}</p>
 

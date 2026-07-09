@@ -50,6 +50,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 | `src/handlers/handleMessage.js` | The whole conversation flow / step machine |
 | `src/groq.js` | The Groq calls + system prompts (data extraction, match analysis, vetting analysis) |
 | `src/matching.js` | The matching engine: skill scoring, trust-weighted match rows, notifications, insights |
+| `src/matchLifecycle.js` | WhatsApp match lifecycle commands, mutual-interest detection, and match feedback |
 | `src/contactRequests.js` | Contact privacy requests and approval/decline replies |
 | `src/vetting.js` | Automated freelancer link checks, skill-proof Trust Score, broken-link re-vets |
 | `src/deadline.js` | Local (zero-API) parsers: deadlines, ack words, yes/no answers |
@@ -74,6 +75,10 @@ When a conversation reaches `completed`, the bot sends the usual "All done! 🎉
 **Skill scoring is 100% local (no API calls):** skills overlap (55%) via a curated keyword dictionary matched against skills/tools/descriptions, budget fit (25%) comparing the client's hourly budget to the freelancer's rate, and availability fit (20%) comparing parsed hours/week to what the hire type needs. One batched Groq call per run then generates the `ai_explanation` / `potential_risks` / `recommended_action` text shown in the dashboard — if Groq is down or rate-limited, deterministic fallback text is used so matches are still written.
 
 **Trust-weighted ranking:** freelancers are still filtered by skill compatibility score ≥ 35 — Trust Score never gates or excludes anyone. Stored match rows also include `trust_score` and `total_score = round(0.75 × compatibility_score + 0.25 × (trust_score ?? 0))`. Candidate ranking uses `total_score`, while client-facing WhatsApp/dashboard views show all three numbers: Overall / Skill / Trust.
+
+**Match lifecycle:** WhatsApp commands update each match row after matching. Freelancers can reply `interested 1`, `decline 1`, or `completed 1`; clients can reply `shortlist 1`, `hire 1`, `decline 1`, or `completed 1`. `show my matches` / `status` sends the current ranked list with lifecycle state, and filtered views are available through `show accepted`, `show declined`, `show shortlisted`, and `show pending`. `show pending` means incoming items waiting on the user: pending contact-info approvals plus matches where the other side acted first and the user's side has not replied yet. The row keeps both sides separately (`freelancer_status`, `client_status`) and derives the overall `status` (`matched`, `shortlisted`, `mutual_interest`, `hired`, `completed`, `declined`). When both sides are positive, the bot sends a mutual-interest message and shares direct contact only where that side has allowed contact sharing; otherwise it points users back to the contact-request flow.
+
+**Feedback loop:** users can reply `useful 1 yes/no` after reviewing a result. If they decline a match, the bot asks why (`budget`, `skills`, `timing`, `trust`, `contact`, or `other`) and stores that in `match_feedback`. This is local command handling, so feedback collection does not call Groq.
 
 **Note on WhatsApp delivery:** Meta only allows free-form messages within 24h of a user's last message. The person who just finished onboarding always gets their message; the *other* side of a match might be outside that window, in which case the send fails quietly (logged) but their in-app notification and match row still appear on the dashboard. Template messages would fix this — future work.
 
@@ -225,6 +230,9 @@ create table if not exists matches (
   id bigint generated always as identity primary key,
   freelancer_phone text not null references freelancers(phone) on delete cascade,
   client_phone text not null references job_requests(phone) on delete cascade,
+  status text not null default 'matched',
+  freelancer_status text not null default 'pending',
+  client_status text not null default 'pending',
   compatibility_score int,
   trust_score int,
   total_score int,
@@ -234,6 +242,10 @@ create table if not exists matches (
   ai_explanation text,
   potential_risks text,
   recommended_action text,
+  freelancer_responded_at timestamptz,
+  client_responded_at timestamptz,
+  hired_at timestamptz,
+  completed_at timestamptz,
   created_at timestamptz default now(),
   unique (freelancer_phone, client_phone)
 );
@@ -285,9 +297,23 @@ create table if not exists contact_requests (
   created_at timestamptz default now(),
   responded_at timestamptz
 );
+
+-- Match usefulness / decline feedback
+create table if not exists match_feedback (
+  id bigint generated always as identity primary key,
+  match_id bigint not null references matches(id) on delete cascade,
+  phone text not null,
+  role text not null,
+  useful boolean,
+  reason_key text,
+  reason_text text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique (match_id, phone)
+);
 ```
 
-**Already have the old tables?** Run this migration instead of dropping anything — it adds the missing column and the three new tables (the `create table if not exists` statements above are safe to re-run too):
+**Already have the old tables?** Run this migration instead of dropping anything — it adds the missing columns and tables (the `create table if not exists` statements above are safe to re-run too):
 
 ```sql
 alter table freelancers add column if not exists brief_description text;
@@ -306,6 +332,13 @@ alter table job_requests add column if not exists hiring_currently boolean;
 alter table job_requests add column if not exists contact_sharing_allowed boolean;
 alter table matches add column if not exists trust_score int;
 alter table matches add column if not exists total_score int;
+alter table matches add column if not exists status text not null default 'matched';
+alter table matches add column if not exists freelancer_status text not null default 'pending';
+alter table matches add column if not exists client_status text not null default 'pending';
+alter table matches add column if not exists freelancer_responded_at timestamptz;
+alter table matches add column if not exists client_responded_at timestamptz;
+alter table matches add column if not exists hired_at timestamptz;
+alter table matches add column if not exists completed_at timestamptz;
 
 create table if not exists vetting_checks (
   id bigint generated always as identity primary key,
@@ -326,6 +359,18 @@ create table if not exists contact_requests (
   status text not null default 'pending',
   created_at timestamptz default now(),
   responded_at timestamptz
+);
+create table if not exists match_feedback (
+  id bigint generated always as identity primary key,
+  match_id bigint not null references matches(id) on delete cascade,
+  phone text not null,
+  role text not null,
+  useful boolean,
+  reason_key text,
+  reason_text text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique (match_id, phone)
 );
 -- then run the `matches`, `notifications`, and `insights` create statements above
 

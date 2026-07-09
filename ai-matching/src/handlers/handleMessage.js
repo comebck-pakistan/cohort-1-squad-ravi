@@ -30,6 +30,11 @@ import {
   parseContactRequestCommand,
   requestContactForMatchRank,
 } from '../contactRequests.js';
+import {
+  handleMatchLifecycleCommand,
+  handlePendingMatchFeedback,
+  parseMatchLifecycleCommand,
+} from '../matchLifecycle.js';
 
 const RESET_PHRASES = ['reset ai', 'reset bot'];
 
@@ -134,6 +139,10 @@ export async function handleIncomingMessage({ phone, messageText }) {
     return;
   }
 
+  if (await handlePendingMatchFeedback({ phone, conversation, messageText })) {
+    return;
+  }
+
   const contactCommand = parseContactRequestCommand(messageText);
   if (contactCommand) {
     const requesterRole = freelancer ? 'freelancer' : conversation?.role;
@@ -141,6 +150,18 @@ export async function handleIncomingMessage({ phone, messageText }) {
       requesterPhone: phone,
       requesterRole,
       rank: contactCommand.rank,
+    });
+    return;
+  }
+
+  const matchLifecycleCommand = parseMatchLifecycleCommand(messageText);
+  if (matchLifecycleCommand && (freelancer || conversation?.step === 'completed')) {
+    const role = freelancer ? 'freelancer' : conversation?.role;
+    await handleMatchLifecycleCommand({
+      phone,
+      role,
+      conversation,
+      command: matchLifecycleCommand,
     });
     return;
   }

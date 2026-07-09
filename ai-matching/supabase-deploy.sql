@@ -61,6 +61,9 @@ create table if not exists matches (
   id bigint generated always as identity primary key,
   freelancer_phone text not null references freelancers(phone) on delete cascade,
   client_phone text not null references job_requests(phone) on delete cascade,
+  status text not null default 'matched',
+  freelancer_status text not null default 'pending',
+  client_status text not null default 'pending',
   compatibility_score int,
   trust_score int,
   total_score int,
@@ -70,6 +73,10 @@ create table if not exists matches (
   ai_explanation text,
   potential_risks text,
   recommended_action text,
+  freelancer_responded_at timestamptz,
+  client_responded_at timestamptz,
+  hired_at timestamptz,
+  completed_at timestamptz,
   created_at timestamptz default now(),
   unique (freelancer_phone, client_phone)
 );
@@ -118,6 +125,19 @@ create table if not exists contact_requests (
   responded_at timestamptz
 );
 
+create table if not exists match_feedback (
+  id bigint generated always as identity primary key,
+  match_id bigint not null references matches(id) on delete cascade,
+  phone text not null,
+  role text not null,
+  useful boolean,
+  reason_key text,
+  reason_text text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique (match_id, phone)
+);
+
 alter table freelancers add column if not exists profile_link text;
 alter table freelancers add column if not exists linkedin_url text;
 alter table freelancers add column if not exists github_url text;
@@ -154,3 +174,10 @@ alter table job_requests add column if not exists brief_description text;
 
 alter table matches add column if not exists trust_score int;
 alter table matches add column if not exists total_score int;
+alter table matches add column if not exists status text not null default 'matched';
+alter table matches add column if not exists freelancer_status text not null default 'pending';
+alter table matches add column if not exists client_status text not null default 'pending';
+alter table matches add column if not exists freelancer_responded_at timestamptz;
+alter table matches add column if not exists client_responded_at timestamptz;
+alter table matches add column if not exists hired_at timestamptz;
+alter table matches add column if not exists completed_at timestamptz;
