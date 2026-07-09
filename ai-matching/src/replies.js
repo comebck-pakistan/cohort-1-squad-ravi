@@ -367,3 +367,24 @@ export function pickEditSuccessReply(field, value) {
     .replace(/\{VALUE\}/g, value || 'Not provided');
 }
 
+
+// Localized Multilingual Translation Matrix (Noor's Contribution)
+const localizedOnboardingReplies = {
+    english: {
+        welcome: "Welcome! Let's get your profile set up. First, what is your full name?",
+        askSkills: "Great! Please list your primary professional skills (comma-separated):",
+        trustScoreNudge: (score) => `Your current profile Trust Score is ${score}%. To unlock premium, high-paying clients, you can update your LinkedIn or GitHub links anytime!`,
+        contactApproved: "Contact access approved! The other party has been notified."
+    },
+    roman_urdu: {
+        welcome: "Khushamdeed! Aiye aapka profile banate hain. Sab se pehle, aapka poora naam kya hai?",
+        askSkills: "Zabardast! Apni khusoosi maharat (skills) likhein (comma se alag karein):",
+        trustScoreNudge: (score) => `Aapka current Trust Score ${score}% hai. Premium clients ke sath match hone ke liye aap kisi bhi waqt apna LinkedIn ya GitHub link bhi update kar sakte hain!`,
+        contactApproved: "Rabta karne ki ijazat mil gayi hai! Dusri party ko inform kar diya gaya hai."
+    }
+};
+
+module.exports = {
+    ...module.exports,
+    localizedOnboardingReplies
+};
