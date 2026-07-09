@@ -48,11 +48,55 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 |---|---|
 | `src/server.js` | The webhook (GET verify + POST receive) |
 | `src/handlers/handleMessage.js` | The whole conversation flow / step machine |
-| `src/groq.js` | The Groq call + system prompt for data extraction |
+| `src/groq.js` | The Groq calls + system prompts (data extraction, match analysis, vetting analysis) |
+| `src/matching.js` | The matching engine: skill scoring, trust-weighted match rows, notifications, insights |
+| `src/vetting.js` | Automated freelancer link checks, skill-proof Trust Score, broken-link re-vets |
+| `src/deadline.js` | Local (zero-API) parsers: deadlines, ack words, yes/no answers |
 | `src/replies.js` | The randomized question bank |
 | `src/supabase.js` | All Supabase reads/writes (search, upsert, create, delete) |
 | `src/whatsapp.js` | Sending WhatsApp replies |
 | `src/config.js` | Loads everything from `.env` (no secrets hardcoded) |
+
+---
+
+## How the Matching Engine Works
+
+When a conversation reaches `completed`, the bot sends the usual "All done! 🎉" reply and then runs matching:
+
+- **Client completes** → every registered freelancer is scored against the new job request. The top 5 (score ≥ 35%) are written to `matches`, both sides get a `notifications` row, the client gets a WhatsApp summary listing the matched freelancers (with contact links), and each matched freelancer gets a WhatsApp heads-up about the project.
+- **Freelancer completes** → every open job request is scored against the new profile. Top matches are written to `matches`, the freelancer gets a WhatsApp summary of matching projects, clients get in-app notifications (no WhatsApp blast), and the freelancer's dashboard `insights` are regenerated.
+
+**Hiring / Working status gate:** onboarding asks clients "are you actively hiring right now?" (`hiring_currently`) and freelancers "are you currently open to work?" (`working_currently`). Only users who answered **yes** take part in matching — inactive clients aren't shown to freelancers and vice versa. Users can flip the flag anytime via the edit flow ("change my hiring status" / "change my working status"): flipping to *no* deletes their match rows (so they stop being displayed on the dashboard), flipping to *yes* re-runs matching immediately. Clear yes/no answers are parsed locally (including haan/ji/nahi) with no API call; only ambiguous answers go to Groq.
+
+**Skill scoring is 100% local (no API calls):** skills overlap (55%) via a curated keyword dictionary matched against skills/tools/descriptions, budget fit (25%) comparing the client's hourly budget to the freelancer's rate, and availability fit (20%) comparing parsed hours/week to what the hire type needs. One batched Groq call per run then generates the `ai_explanation` / `potential_risks` / `recommended_action` text shown in the dashboard — if Groq is down or rate-limited, deterministic fallback text is used so matches are still written.
+
+**Trust-weighted ranking:** freelancers are still filtered by skill compatibility score ≥ 35 — Trust Score never gates or excludes anyone. Stored match rows also include `trust_score` and `total_score = round(0.75 × compatibility_score + 0.25 × (trust_score ?? 0))`. Candidate ranking uses `total_score`, while client-facing WhatsApp/dashboard views show all three numbers: Overall / Skill / Trust.
+
+**Note on WhatsApp delivery:** Meta only allows free-form messages within 24h of a user's last message. The person who just finished onboarding always gets their message; the *other* side of a match might be outside that window, in which case the send fails quietly (logged) but their in-app notification and match row still appear on the dashboard. Template messages would fix this — future work.
+
+## Abandoned Registration Reminders
+
+The server runs a lightweight reminder loop for users who started onboarding but have not reached `step = 'completed'`. By default, after 60 minutes of inactivity it sends one WhatsApp nudge:
+
+`You're just a few minutes away from finishing your registration.`
+
+The message then includes the current question for their saved `conversation.step`, so their next reply continues from exactly where they left off. The reminder does not advance the step or overwrite collected data. A `registration_reminder_sent_at` marker is stored inside `conversations.temp_data` to avoid repeated nudges. The loop skips conversations older than `REGISTRATION_REMINDER_MAX_AGE_MINUTES` (default 23h) because free-form WhatsApp sends may fail outside Meta's 24h window.
+
+## Trust Score & Vetting
+
+Freelancer onboarding now asks four optional proof questions between name and portfolio: LinkedIn, GitHub, CV/resume, and support docs. Each can be skipped. `collect_profile_link` remains as a legacy alias for old in-flight conversations and maps to `linkedin_url`.
+
+Vetting runs only for freelancers, after the completion reply and before matching. It uses local/free checks first: GitHub public API, LinkedIn URL format + slug/name match only, CV text/PDF extraction, portfolio fetch or oEmbed, and support-doc liveness/content-type sanity. There is no manual vetting, no account-age signal, no scraping/headless browser, and no trust gating.
+
+Trust Score is 0-100:
+
+- **Identity, Consistency & Link Integrity (45):** coverage of the core trio LinkedIn/GitHub/CV gives 10 pts for ≥2 provided, 4 pts for exactly 1, 0 for none. This is the only missing-link penalty. Link integrity averages provided liveness rows (pass=1, unverifiable=0.6, fail=0) for 20 pts. Identity consistency averages identity rows for 15 pts.
+- **Skill Proof (35):** claimed skills from `skills + tools + brief_description` are compared with skills evidenced in GitHub/CV/portfolio content. If the optional Groq vetting call runs, the local ratio is blended 50/50 with Groq-supported-vs-unsupported skill claims.
+- **Claims Consistency (20):** Groq consistency score, or 0 if no evidence existed and the call was skipped.
+
+Token rules: full vetting makes at most one Groq call and skips it entirely when no artifact yields content. Broken links cost zero Groq tokens. Single-artifact re-vets reuse the stored claims row and fetch only that artifact, then update `trust_score`, `trust_tier`, `trust_breakdown`, and existing match `total_score` snapshots.
+
+Broken-link protocol: the score is calculated first with broken links marked `fail`, then the freelancer gets a breakdown plus a prompt to resend just the broken link. The resend path updates only that one field and re-checks only that host.
  
 ---
  
@@ -98,6 +142,12 @@ Then fill in `.env` with your real values:
 | `SUPABASE_URL` | supabase.com → your project → Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page (the **service_role** key, not "anon") |
 | `GROQ_API_KEY` | console.groq.com → API Keys (rotate if ever exposed) |
+| `GITHUB_TOKEN` | Optional — GitHub personal token for higher public API limits during vetting |
+| `REGISTRATION_REMINDER_ENABLED` | Optional — set `false` to disable abandoned-registration reminders |
+| `REGISTRATION_REMINDER_AFTER_MINUTES` | Optional — inactivity age before sending the nudge, default `60` |
+| `REGISTRATION_REMINDER_INTERVAL_MINUTES` | Optional — reminder loop interval, default `10` |
+| `REGISTRATION_REMINDER_MAX_AGE_MINUTES` | Optional — max conversation age for free-form reminders, default `1380` |
+| `REGISTRATION_REMINDER_BATCH_SIZE` | Optional — max conversations checked per loop, default `25` |
  
 `.env` is in `.gitignore` — it never gets pushed to GitHub.
  
@@ -123,12 +173,22 @@ create table if not exists freelancers (
   phone text not null,
   name text,
   profile_link text,
+  linkedin_url text,
+  github_url text,
+  cv_url text,
+  support_docs text,
   portfolio text,
   skills text,
   tools text,
   rate text,
   availability text,
   preferences text,
+  working_currently boolean,
+  brief_description text,
+  trust_score int,
+  trust_tier text,
+  trust_breakdown jsonb,
+  vetted_at timestamptz,
   created_at timestamp default now(),
   updated_at timestamptz default now(),
   unique (phone)
@@ -147,10 +207,102 @@ create table if not exists job_requests (
   deadline text,
   deadline_normalized text,
   is_recurring boolean,
+  hiring_currently boolean,
   brief_description text,
   created_at timestamp default now(),
   unique (phone)
 );
+
+-- Matches table (written by the matching engine when onboarding completes).
+-- The foreign keys are REQUIRED — the frontend's `freelancer:freelancers(*)`
+-- embedded select only works when Supabase can see the relationship.
+create table if not exists matches (
+  id bigint generated always as identity primary key,
+  freelancer_phone text not null references freelancers(phone) on delete cascade,
+  client_phone text not null references job_requests(phone) on delete cascade,
+  compatibility_score int,
+  trust_score int,
+  total_score int,
+  skills_overlap text[] default '{}',
+  budget_fit boolean,
+  availability_fit boolean,
+  ai_explanation text,
+  potential_risks text,
+  recommended_action text,
+  created_at timestamptz default now(),
+  unique (freelancer_phone, client_phone)
+);
+
+-- In-app notifications (read by the dashboard's notifications page)
+create table if not exists notifications (
+  id bigint generated always as identity primary key,
+  phone text not null,
+  type text,
+  title text,
+  body text,
+  read boolean default false,
+  created_at timestamptz default now()
+);
+
+-- Dashboard insights (regenerated per freelancer when their profile completes)
+create table if not exists insights (
+  id bigint generated always as identity primary key,
+  phone text not null,
+  insight_type text,
+  content text,
+  metric_value numeric,
+  metric_label text,
+  icon text,
+  color text,
+  generated_at timestamptz default now()
+);
+
+-- Stored vetting checks (replaced per full vet or per single-artifact re-vet)
+create table if not exists vetting_checks (
+  id bigint generated always as identity primary key,
+  phone text not null,
+  artifact text not null,
+  check_type text not null,
+  status text not null,
+  evidence jsonb,
+  checked_at timestamptz default now()
+);
+```
+
+**Already have the old tables?** Run this migration instead of dropping anything — it adds the missing column and the three new tables (the `create table if not exists` statements above are safe to re-run too):
+
+```sql
+alter table freelancers add column if not exists brief_description text;
+alter table freelancers add column if not exists updated_at timestamptz default now();
+alter table freelancers add column if not exists working_currently boolean;
+alter table freelancers add column if not exists linkedin_url text;
+alter table freelancers add column if not exists github_url text;
+alter table freelancers add column if not exists cv_url text;
+alter table freelancers add column if not exists support_docs text;
+alter table freelancers add column if not exists trust_score int;
+alter table freelancers add column if not exists trust_tier text;
+alter table freelancers add column if not exists trust_breakdown jsonb;
+alter table freelancers add column if not exists vetted_at timestamptz;
+alter table job_requests add column if not exists hiring_currently boolean;
+alter table matches add column if not exists trust_score int;
+alter table matches add column if not exists total_score int;
+
+create table if not exists vetting_checks (
+  id bigint generated always as identity primary key,
+  phone text not null,
+  artifact text not null,
+  check_type text not null,
+  status text not null,
+  evidence jsonb,
+  checked_at timestamptz default now()
+);
+-- then run the `matches`, `notifications`, and `insights` create statements above
+
+-- OPTIONAL: users registered before the hiring/working status feature have
+-- NULL flags and are excluded from matching until they answer. Run these to
+-- grandfather them in as active instead:
+-- update freelancers set working_currently = true where working_currently is null;
+-- update job_requests set hiring_currently = true where hiring_currently is null;
 ```
  
 **Checking your database anytime later** — instead of clicking through each table tab, run this to see every table and column at once:

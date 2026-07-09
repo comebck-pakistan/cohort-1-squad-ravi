@@ -15,6 +15,7 @@ export function useMatches(phone: string | null, role: 'freelancer' | 'client' |
         .from('matches')
         .select('*, freelancer:freelancers(*)')
         .eq(field, phone)
+        .order('total_score', { ascending: false, nullsFirst: false })
         .order('compatibility_score', { ascending: false });
       if (error) throw error;
       return (data ?? []) as Match[];

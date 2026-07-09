@@ -6,6 +6,8 @@ import {
   saveJobRequest,
   resetUser,
   updateFreelancerField,
+  updateJobRequestField,
+  deleteMatchesForPhone,
 } from '../supabase.js';
 import { extractConversationData } from '../groq.js';
 import {
@@ -20,9 +22,75 @@ import {
   pickPreferencesReply,
 } from '../replies.js';
 import { sendWhatsAppMessage } from '../whatsapp.js';
-import { isAckOnly, parseDeadlineLocally, ensureDeadlineNormalized } from '../deadline.js';
+import { isAckOnly, parseDeadlineLocally, parseYesNoLocally, ensureDeadlineNormalized } from '../deadline.js';
+import { runMatchingForClient, runMatchingForFreelancer } from '../matching.js';
+import { classifyLinkField, extractFirstUrl, revetArtifact, runVettingForFreelancer } from '../vetting.js';
 
 const RESET_PHRASES = ['reset ai', 'reset bot'];
+
+// ── Hiring/Working status flags ───────────────────────────────────────────────
+// Boolean fields answered with yes/no. Only users with a `true` flag take part
+// in matching; flipping to "no" removes their matches, flipping to "yes"
+// re-runs matching for them.
+const YESNO_STEPS = {
+  collect_hiring_status:  { field: 'hiring_currently',  next: 'collect_client_brief_desc' },
+  collect_working_status: { field: 'working_currently', next: 'collect_freelancer_brief_desc' },
+};
+const FLAG_FIELDS = new Set(['hiring_currently', 'working_currently']);
+const FLAG_QUESTIONS = {
+  hiring_currently:  'are you currently hiring?',
+  working_currently: 'are you currently open to work?',
+};
+const LINK_STEPS = {
+  collect_profile_link:  { field: 'linkedin_url', next: 'collect_github' }, // legacy alias
+  collect_linkedin:      { field: 'linkedin_url', next: 'collect_github' },
+  collect_github:        { field: 'github_url', next: 'collect_cv' },
+  collect_cv:            { field: 'cv_url', next: 'collect_support_docs' },
+  collect_support_docs:  { field: 'support_docs', next: 'collect_portfolio' },
+  collect_portfolio:     { field: 'portfolio', next: 'collect_skills' },
+};
+const LINK_FIELDS = new Set(['linkedin_url', 'github_url', 'cv_url', 'support_docs', 'portfolio']);
+
+function canonicalLinkField(field) {
+  return field === 'profile_link' ? 'linkedin_url' : field;
+}
+
+function formatFieldValue(value) {
+  if (value === true) return 'yes';
+  if (value === false) return 'no';
+  return value;
+}
+
+async function applyFlagSideEffects(phone, field, value) {
+  try {
+    if (value === false) {
+      await deleteMatchesForPhone(phone);
+      return;
+    }
+    if (field === 'working_currently') {
+      await runMatchingForFreelancer(phone);
+    } else {
+      await runMatchingForClient(phone);
+    }
+  } catch (err) {
+    console.error(`[handleMessage] Flag side effects failed for ${field}=${value}, ${phone}:`, err);
+  }
+}
+
+async function applyLinkSideEffects(phone, field) {
+  if (!LINK_FIELDS.has(field)) return;
+  try {
+    await revetArtifact(phone, field);
+  } catch (err) {
+    console.error(`[handleMessage] Link re-vet failed for ${field}, ${phone}:`, err);
+  }
+}
+
+function pendingBrokenArtifact(freelancer) {
+  const broken = freelancer?.trust_breakdown?.broken_links || [];
+  const uniqueArtifacts = [...new Set(broken.map((item) => item.artifact).filter((artifact) => LINK_FIELDS.has(artifact)))];
+  return uniqueArtifacts.length === 1 ? uniqueArtifacts[0] : null;
+}
 
 export async function handleIncomingMessage({ phone, messageText }) {
   // Artificial delay to ensure "typing..." indicator is visible even on fast paths
@@ -42,9 +110,23 @@ export async function handleIncomingMessage({ phone, messageText }) {
     return;
   }
 
+  // --- 1b. COMPLETED FREELANCER LINK RE-VET FAST-PATH ---
+  // A completed freelancer can resend just one broken proof link. We classify
+  // locally and re-check only that artifact — no Groq call.
+  const incomingUrl = extractFirstUrl(messageText);
+  if (conversation?.step === 'completed' && freelancer && incomingUrl) {
+    const field = canonicalLinkField(classifyLinkField(incomingUrl) || pendingBrokenArtifact(freelancer));
+    if (field && LINK_FIELDS.has(field)) {
+      await updateFreelancerField(phone, field, incomingUrl);
+      await sendWhatsAppMessage(phone, `Got it — re-checking your ${field.replace('_', ' ')} now.`);
+      await applyLinkSideEffects(phone, field);
+      return;
+    }
+  }
+
   // --- 2. ACTIVE EDITING STATE ---
   if (conversation?.temp_data?.editing_field) {
-    const editingField = conversation.temp_data.editing_field;
+    const editingField = canonicalLinkField(conversation.temp_data.editing_field);
     
     if (editingField === 'vague') {
       const aiResult = await extractConversationData({
@@ -67,10 +149,25 @@ export async function handleIncomingMessage({ phone, messageText }) {
       }
     } else {
       // Receiving the new value for the active editingField
-      const newValue = messageText.trim();
+      let newValue = messageText.trim();
+
+      // Flag fields are booleans — coerce a yes/no answer, and re-ask instead
+      // of storing free text when the answer isn't a clear yes or no.
+      if (FLAG_FIELDS.has(editingField)) {
+        const parsed = parseYesNoLocally(newValue);
+        if (parsed === null) {
+          await sendWhatsAppMessage(phone, `Just a quick yes or no — ${FLAG_QUESTIONS[editingField]}`);
+          return;
+        }
+        newValue = parsed;
+      }
+      if (LINK_FIELDS.has(editingField)) {
+        newValue = isSkipMessage(messageText) ? null : (extractFirstUrl(messageText) || newValue);
+      }
+
       const newTempData = { ...conversation.temp_data };
       newTempData[editingField] = newValue;
-      
+
       const resumeStep = newTempData.resume_step || conversation.step;
       delete newTempData.editing_field;
       delete newTempData.resume_step;
@@ -81,9 +178,17 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
       if (freelancer) {
         await updateFreelancerField(phone, editingField, newValue);
+      } else if (conversation.role === 'client') {
+        await updateJobRequestField(phone, editingField, newValue);
       }
 
-      await sendWhatsAppMessage(phone, pickEditSuccessReply(editingField, newValue));
+      await sendWhatsAppMessage(phone, pickEditSuccessReply(editingField, formatFieldValue(newValue)));
+      if (FLAG_FIELDS.has(editingField)) {
+        await applyFlagSideEffects(phone, editingField, newValue);
+      }
+      if (freelancer && LINK_FIELDS.has(editingField)) {
+        await applyLinkSideEffects(phone, editingField);
+      }
       return;
     }
   }
@@ -116,7 +221,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
       // Build a synthetic aiResult that looks identical to what Groq would return
       aiResult = {
         role: conversation.role,
-        next_step: 'collect_client_brief_desc',
+        next_step: 'collect_hiring_status',
         extracted_data: {
           ...(conversation.temp_data || {}),
           deadline: localResult.deadline_normalized,
@@ -140,83 +245,131 @@ export async function handleIncomingMessage({ phone, messageText }) {
     // confidence === 'low' → fall through to Groq below
   }
 
-  // --- 5. SKIP PROFILE LINK ---
-  if (conversation && conversation.step === 'collect_profile_link' && isSkipMessage(messageText)) {
-    aiResult = {
-      role: conversation.role,
-      next_step: 'collect_portfolio',
-      extracted_data: { ...(conversation.temp_data || {}), profile_link: null }
-    };
-  } else {
-    // --- 6. NORMAL GROQ EXTRACTION (one call, same as before) ---
-    aiResult = await extractConversationData({
-      step: conversation?.step,
-      role: conversation?.role,
-      tempData: conversation?.temp_data,
-      messageText,
-    });
-
-    // Suppress edit intent for pure acknowledgement messages
-    if (isAckOnly(messageText) && aiResult.edit_request) {
-      aiResult.edit_request.is_edit = false;
+  // --- 4b. HIRING/WORKING STATUS FAST-PATH (local parser — NO Groq call) ---
+  // A clear yes/no at these steps sets the boolean flag and advances without
+  // an API call. Ambiguous answers fall through to Groq, whose prompt re-asks.
+  if (YESNO_STEPS[conversation?.step]) {
+    const parsed = parseYesNoLocally(messageText);
+    if (parsed !== null) {
+      const { field, next } = YESNO_STEPS[conversation.step];
+      await saveConversation({
+        id: conversation.id,
+        phone,
+        role: conversation.role,
+        step: next,
+        temp_data: { ...(conversation.temp_data || {}), [field]: parsed },
+      });
+      await sendWhatsAppMessage(phone, pickReplyText(next).text);
+      return;
     }
+  }
 
-    // ── PURE DATA COLLECTION GUARD ──────────────────────────────────────────
-    // The brief_desc and collect_project steps collect free-form text that may
-    // contain words like "edit", "change", "update" — these are part of the
-    // user's answer, NOT edit requests for a previous field. Force is_edit=false
-    // here as a code-level safety net regardless of what Groq returned.
-    const PURE_DATA_STEPS = new Set([
-      'collect_client_brief_desc',
-      'collect_freelancer_brief_desc',
-      'collect_project',
-    ]);
-    if (PURE_DATA_STEPS.has(conversation?.step) && aiResult.edit_request) {
-      aiResult.edit_request.is_edit = false;
-    }
-
-    // Post-Groq deadline guard: if Groq still didn't advance (unusual phrasing
-    // that passed local check with low confidence), force advancement using the
-    // raw message as the deadline value.
-    if (
-      conversation?.step === 'collect_deadline' &&
-      aiResult.next_step === 'collect_deadline'
-    ) {
-      aiResult.next_step = 'collect_client_brief_desc';
-      aiResult.extracted_data = {
-        ...(aiResult.extracted_data || {}),
-        deadline: aiResult.extracted_data?.deadline || messageText.trim(),
+  // --- 5. LINK FAST-PATH (local parser — NO Groq call) ---
+  if (conversation && LINK_STEPS[conversation.step]) {
+    const { field, next } = LINK_STEPS[conversation.step];
+    const url = extractFirstUrl(messageText);
+    if (url || isSkipMessage(messageText)) {
+      const tempData = {
+        ...(conversation.temp_data || {}),
+        [field]: url || null,
       };
-      if (aiResult.edit_request) aiResult.edit_request.is_edit = false;
+      await saveConversation({
+        id: conversation.id,
+        phone,
+        role: conversation.role,
+        step: next,
+        temp_data: tempData,
+      });
+      await sendWhatsAppMessage(phone, pickReplyText(next).text);
+      return;
     }
+  }
 
-    // Ensure deadline_normalized is never null when deadline_raw has a value.
-    // Runs on every Groq response — cheap (no API call), idempotent.
-    if (conversation?.step === 'collect_deadline' || aiResult.extracted_data?.deadline_raw) {
-      ensureDeadlineNormalized(aiResult.extracted_data);
-    }
+  // --- 6. NORMAL GROQ EXTRACTION (one call, same as before) ---
+  aiResult = await extractConversationData({
+    step: conversation?.step,
+    role: conversation?.role,
+    tempData: conversation?.temp_data,
+    messageText,
+  });
+
+  // Suppress edit intent for pure acknowledgement messages
+  if (isAckOnly(messageText) && aiResult.edit_request) {
+    aiResult.edit_request.is_edit = false;
+  }
+
+  // ── PURE DATA COLLECTION GUARD ──────────────────────────────────────────
+  // The brief_desc and collect_project steps collect free-form text that may
+  // contain words like "edit", "change", "update" — these are part of the
+  // user's answer, NOT edit requests for a previous field. Force is_edit=false
+  // here as a code-level safety net regardless of what Groq returned.
+  const PURE_DATA_STEPS = new Set([
+    'collect_client_brief_desc',
+    'collect_freelancer_brief_desc',
+    'collect_project',
+  ]);
+  if (PURE_DATA_STEPS.has(conversation?.step) && aiResult.edit_request) {
+    aiResult.edit_request.is_edit = false;
+  }
+
+  // Post-Groq deadline guard: if Groq still didn't advance (unusual phrasing
+  // that passed local check with low confidence), force advancement using the
+  // raw message as the deadline value.
+  if (
+    conversation?.step === 'collect_deadline' &&
+    aiResult.next_step === 'collect_deadline'
+  ) {
+    aiResult.next_step = 'collect_hiring_status';
+    aiResult.extracted_data = {
+      ...(aiResult.extracted_data || {}),
+      deadline: aiResult.extracted_data?.deadline || messageText.trim(),
+    };
+    if (aiResult.edit_request) aiResult.edit_request.is_edit = false;
+  }
+
+  // Ensure deadline_normalized is never null when deadline_raw has a value.
+  // Runs on every Groq response — cheap (no API call), idempotent.
+  if (conversation?.step === 'collect_deadline' || aiResult.extracted_data?.deadline_raw) {
+    ensureDeadlineNormalized(aiResult.extracted_data);
   }
 
   // --- 7. NEW EDIT REQUEST ---
   if (aiResult.edit_request?.is_edit) {
-    const field = aiResult.edit_request.target_field;
-    const value = aiResult.edit_request.provided_value;
+    const field = canonicalLinkField(aiResult.edit_request.target_field);
+    let value = aiResult.edit_request.provided_value;
     const currentStep = conversation?.step || aiResult.next_step;
 
-    if (field && value) {
+    // Flag fields are booleans — coerce a provided yes/no value. If it isn't a
+    // clear yes/no, null it out so the ask-for-value branch below takes over.
+    if (field && FLAG_FIELDS.has(field) && value != null) {
+      value = parseYesNoLocally(String(value));
+    }
+
+    if (field && (value || value === false)) {
+      if (field && LINK_FIELDS.has(field)) {
+        value = isSkipMessage(String(value)) ? null : (extractFirstUrl(String(value)) || value);
+      }
       // Direct update — merge with existing temp_data to avoid losing fields
       const newTempData = { ...(conversation?.temp_data || {}), ...(aiResult.extracted_data || {}) };
       newTempData[field] = value;
-      
+
       await saveConversation({
         id: conversation?.id ?? null, phone, role: aiResult.role, step: currentStep, temp_data: newTempData
       });
 
       if (freelancer) {
         await updateFreelancerField(phone, field, value);
+      } else if ((conversation?.role || aiResult.role) === 'client') {
+        await updateJobRequestField(phone, field, value);
       }
 
-      await sendWhatsAppMessage(phone, pickEditSuccessReply(field, value));
+      await sendWhatsAppMessage(phone, pickEditSuccessReply(field, formatFieldValue(value)));
+      if (FLAG_FIELDS.has(field)) {
+        await applyFlagSideEffects(phone, field, value);
+      }
+      if (freelancer && LINK_FIELDS.has(field)) {
+        await applyLinkSideEffects(phone, field);
+      }
       return;
     } else if (field) {
       // Specific field, ask for value — merge with existing temp_data
@@ -278,6 +431,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
     temp_data: mergedTempData,
   });
 
+  let completedRole = null;
   if (aiResult.next_step === 'completed') {
     // aiResult.role can be null on the final brief_desc step because Groq doesn't
     // always re-emit it. Fall back to the role stored in the conversation row,
@@ -288,8 +442,10 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
     if (effectiveRole === 'freelancer') {
       await saveFreelancerProfile(phone, mergedTempData);
+      completedRole = 'freelancer';
     } else if (effectiveRole === 'client') {
       await saveJobRequest(phone, mergedTempData);
+      completedRole = 'client';
     } else {
       console.warn('[handleMessage] Completion reached but role is unknown — no permanent row written. aiResult.role:', aiResult.role, 'conversation.role:', conversation?.role);
     }
@@ -300,4 +456,27 @@ export async function handleIncomingMessage({ phone, messageText }) {
     ? pickPreferencesReply(mergedTempData)
     : pickReplyText(aiResult.next_step).text;
   await sendWhatsAppMessage(phone, replyText);
+
+  // Matching runs AFTER the completion reply so "All done! 🎉" arrives before
+  // the match results. A matching failure must never surface to the user —
+  // their profile is already saved at this point.
+  if (completedRole) {
+    if (completedRole === 'freelancer') {
+      try {
+        await runVettingForFreelancer(phone);
+      } catch (err) {
+        console.error(`[handleMessage] Vetting failed for freelancer ${phone}:`, err);
+      }
+    }
+
+    try {
+      if (completedRole === 'client') {
+        await runMatchingForClient(phone);
+      } else {
+        await runMatchingForFreelancer(phone);
+      }
+    } catch (err) {
+      console.error(`[handleMessage] Matching failed for ${completedRole} ${phone}:`, err);
+    }
+  }
 }

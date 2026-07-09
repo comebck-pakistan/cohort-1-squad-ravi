@@ -3,7 +3,7 @@
 import { use } from 'react';
 import { motion } from 'framer-motion';
 import {
-  ArrowLeft, MessageCircle, ExternalLink, Star, Target,
+  ArrowLeft, MessageCircle, ExternalLink,
   DollarSign, Clock, Globe, Briefcase, AlertTriangle, ChevronRight, Zap
 } from 'lucide-react';
 import Link from 'next/link';
@@ -66,15 +66,16 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   const skills = parseSkills(match.freelancer?.skills ?? null);
-  const tools = parseSkills(match.freelancer?.tools ?? null);
-  const score = match.compatibility_score;
+  const score = match.total_score ?? match.compatibility_score;
+  const skillScore = match.compatibility_score;
+  const trustScore = match.trust_score ?? match.freelancer?.trust_score ?? 0;
 
   const radarData = [
-    { axis: 'Skills', value: Math.min(100, score + (match.skills_overlap?.length ?? 0) * 5) },
+    { axis: 'Skills', value: Math.min(100, skillScore + (match.skills_overlap?.length ?? 0) * 5) },
     { axis: 'Budget', value: match.budget_fit ? 90 : 50 },
     { axis: 'Availability', value: match.availability_fit ? 95 : 45 },
-    { axis: 'Experience', value: Math.max(40, score - 5) },
-    { axis: 'Preferences', value: Math.max(50, score + 10) },
+    { axis: 'Experience', value: Math.max(40, skillScore - 5) },
+    { axis: 'Preferences', value: Math.max(50, skillScore + 10) },
   ];
 
   return (
@@ -107,7 +108,7 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
               <ScoreRing score={score} size={80} />
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-4 border-t border-white/[0.06]">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6 pt-4 border-t border-white/[0.06]">
               <div>
                 <div className="text-xs text-white/30 mb-1 flex items-center gap-1"><DollarSign className="w-3 h-3" /> Rate</div>
                 <div className="text-sm font-medium text-white">{match.freelancer?.rate ?? 'TBD'}</div>
@@ -123,6 +124,10 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
               <div>
                 <div className="text-xs text-white/30 mb-1">Available Now</div>
                 <Badge variant={match.availability_fit ? 'success' : 'warning'}>{match.availability_fit ? 'Yes' : 'Limited'}</Badge>
+              </div>
+              <div>
+                <div className="text-xs text-white/30 mb-1">Trust</div>
+                <Badge variant={trustScore >= 55 ? 'success' : trustScore >= 35 ? 'warning' : 'secondary'}>{trustScore}/100</Badge>
               </div>
             </div>
           </CardContent>

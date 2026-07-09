@@ -2,6 +2,7 @@ import express from 'express';
 import { config } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
+import { startRegistrationReminderLoop } from './reminders.js';
 
 const app = express();
 app.use(express.json());
@@ -84,4 +85,5 @@ app.get('/', (req, res) => {
 
 app.listen(config.port, () => {
   console.log(`🚀 The bot listening on port ${config.port}`);
+  startRegistrationReminderLoop();
 });

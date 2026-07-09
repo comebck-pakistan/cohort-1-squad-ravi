@@ -5,6 +5,10 @@ export interface FreelancerProfile {
   phone: string;
   name: string | null;
   profile_link: string | null;
+  linkedin_url: string | null;
+  github_url: string | null;
+  cv_url: string | null;
+  support_docs: string | null;
   portfolio: string | null;
   skills: string | null;
   tools: string | null;
@@ -15,11 +19,13 @@ export interface FreelancerProfile {
   avatar_url: string | null;
   languages: string[] | null;
   experience_years: number | null;
-  linkedin_url: string | null;
-  cv_url: string | null;
   location: string | null;
   timezone: string | null;
   profile_score: number | null;
+  trust_score: number | null;
+  trust_tier: string | null;
+  trust_breakdown: Record<string, unknown> | null;
+  vetted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +60,8 @@ export interface Match {
   freelancer_phone: string;
   client_phone: string;
   compatibility_score: number;
+  trust_score: number | null;
+  total_score: number | null;
   skills_overlap: string[];
   budget_fit: boolean;
   availability_fit: boolean;
