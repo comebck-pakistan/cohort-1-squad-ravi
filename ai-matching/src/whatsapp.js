@@ -62,3 +62,50 @@ export async function markAsReadAndTyping(messageId) {
     console.error(`WhatsApp markAsReadAndTyping fetch error:`, err);
   }
 }
+
+
+// Advanced Roman Urdu Context & Lifecycle Command Interpreter (Noor's Contribution)
+function coreCommandNormalizer(incomingText, sessionState = {}) {
+    if (!incomingText) return incomingText;
+    let cleanText = incomingText.toLowerCase().trim();
+    
+    // Convert Roman Urdu numbers if typed out in text format
+    cleanText = cleanText.replace(/ek/g, '1').replace(/do/g, '2').replace(/teen/g, '3');
+
+    // 1. Language Toggle Detection Switch
+    if (cleanText === 'choose english' || cleanText === '1') {
+        sessionState.preferred_language = 'english';
+    } else if (cleanText === 'choose urdu' || cleanText === '2' || cleanText.includes('urdu')) {
+        sessionState.preferred_language = 'roman_urdu';
+    }
+
+    // 2. High-Utility Contact Privacy & Match Lifecycle Translators
+    if (cleanText.includes('rabta') || cleanText.includes('raabta') || cleanText.includes('number do')) {
+        let matchIndex = cleanText.match(/\d+/);
+        return matchIndex ? `request contact ${matchIndex}` : 'request contact 1';
+    }
+    
+    if (cleanText.includes('dilchaspi') || cleanText.includes('kaam karna hai') || cleanText.includes('interested')) {
+        let matchIndex = cleanText.match(/\d+/);
+        return matchIndex ? `interested ${matchIndex}` : 'interested 1';
+    }
+    
+    if (cleanText.includes('radd') || cleanText.includes('mana') || cleanText.includes('reject')) {
+        let matchIndex = cleanText.match(/\d+/);
+        return matchIndex ? `decline ${matchIndex}` : 'decline 1';
+    }
+    
+    if (cleanText === 'theek hai' || cleanText === 'haan' || cleanText === 'ji' || cleanText === 'ji bilkul') {
+        return 'yes';
+    }
+    
+    if (cleanText === 'nahi' || cleanText === 'na' || cleanText === 'mat karo') {
+        return 'no';
+    }
+
+    return incomingText;
+}
+
+if (typeof module !== 'undefined') {
+    module.exports.coreCommandNormalizer = coreCommandNormalizer;
+}
