@@ -19,7 +19,8 @@ JSON Schema:
     "deadline_normalized": "clean version: e.g. 'every week', '2026-07-15', '3 weeks'",
     "is_recurring": true or false,
     "deadline_date": "YYYY-MM-DD or null (best-effort, never blocks advancement)",
-    "availability_date": "YYYY-MM-DD or null"
+    "availability_date": "YYYY-MM-DD or null",
+    "contact_sharing_allowed": true or false
   },
   "edit_request": {
     "is_edit": true or false,
@@ -31,7 +32,7 @@ JSON Schema:
 Rules:
 - ALWAYS preserve all existing keys/values in 'Collected Data So Far' into your 'extracted_data' output. Merge new data, never overwrite or delete old data.
 - Determine next_step and extracted_data using the flow below. Do NOT write any reply text.
-- If the user explicitly asks to change or edit a previously provided piece of info, set edit_request.is_edit to true. Determine the internal 'target_field' (e.g., 'rate', 'skills', 'budget_project', 'name', 'hiring_currently' for a client's hiring status, 'working_currently' for a freelancer's open-to-work status). If they provide the new value in the same message, put it in 'provided_value'. If vague, set target_field to null. If editing, keep next_step the same.
+- If the user explicitly asks to change or edit a previously provided piece of info, set edit_request.is_edit to true. Determine the internal 'target_field' (e.g., 'rate', 'skills', 'budget_project', 'name', 'hiring_currently' for a client's hiring status, 'working_currently' for a freelancer's open-to-work status, 'contact_sharing_allowed' for whether their WhatsApp contact can be shown directly). If they provide the new value in the same message, put it in 'provided_value'. If vague, set target_field to null. If editing, keep next_step the same.
 - CRITICAL EDIT RULE: Short acknowledgement/filler words (e.g., "ok", "perf", "thanks", "great", "cool", "nice", "got it", emojis) with no actual new value or explicit field reference MUST NEVER be classified as an edit request. Set edit_request.is_edit to false for these.
 Date Parsing Rules:
 - You will be given [TODAY'S DATE] in the user prompt.
@@ -68,8 +69,9 @@ Onboarding Steps:
 11. collect_rate: extract 'rate' (hourly rate). next_step: collect_availability.
 12. collect_availability: extract 'availability'. next_step: collect_preferences.
 13. collect_preferences: extract 'preferences'. next_step: collect_working_status.
-13b. collect_working_status: extract 'working_currently' as boolean — true ONLY if the freelancer clearly says yes (they are currently open to / available for new work), false ONLY if they clearly say no. If the answer is neither a clear yes nor a clear no, leave it out and keep next_step the same (re-ask). next_step: collect_freelancer_brief_desc.
-13a. collect_freelancer_brief_desc: extract EXACTLY the raw text of the user's message into 'brief_description'. Do not try to extract structured fields. next_step: completed.
+13b. collect_working_status: extract 'working_currently' as boolean — true ONLY if the freelancer clearly says yes (they are currently open to / available for new work), false ONLY if they clearly say no. If the answer is neither a clear yes nor a clear no, leave it out and keep next_step the same (re-ask). next_step: collect_contact_sharing.
+13c. collect_contact_sharing: extract 'contact_sharing_allowed' as boolean — true ONLY if the user clearly says yes (matched people can see their WhatsApp contact directly), false ONLY if they clearly say no (matched people must request approval first). If ambiguous, leave it out and keep next_step the same. If role='freelancer' next_step: collect_freelancer_brief_desc. If role='client' next_step: collect_client_brief_desc.
+13d. collect_freelancer_brief_desc: extract EXACTLY the raw text of the user's message into 'brief_description'. Do not try to extract structured fields. next_step: completed.
 
 === CLIENT FLOW ===
 10. collect_project: extract WHATEVER the client says as 'project_description' (even a short single sentence). next_step: collect_hire_type.
@@ -77,8 +79,9 @@ Onboarding Steps:
 12. collect_budget_fulltime: extract 'budget_hourly' (their expected hourly rate budget). next_step: collect_deadline.
 13. collect_budget_project: extract 'budget_project' (project budget) and 'project_count' (how many projects, default 1 if unclear). next_step: collect_deadline.
 14. collect_deadline: extract 'deadline' (timeline/when they need it done). Accept ANY reasonable answer: a date ("July 15"), a duration ("2 weeks", "week"), a recurring cadence ("weekly", "every week"), or a relative phrase ("asap", "this month"). Store the raw user text in 'deadline'. Always advance next_step to 'collect_hiring_status' as long as the message contains any time/duration/frequency reference. Only re-ask if the message has zero time reference.
-14b. collect_hiring_status: extract 'hiring_currently' as boolean — true ONLY if the client clearly says yes (they are actively hiring for this right now), false ONLY if they clearly say no (just planning/exploring). If the answer is neither a clear yes nor a clear no, leave it out and keep next_step the same (re-ask). next_step: collect_client_brief_desc.
-14a. collect_client_brief_desc: extract EXACTLY the raw text of the user's message into 'brief_description'. Do not try to extract structured fields. next_step: completed.
+14b. collect_hiring_status: extract 'hiring_currently' as boolean — true ONLY if the client clearly says yes (they are actively hiring for this right now), false ONLY if they clearly say no (just planning/exploring). If the answer is neither a clear yes nor a clear no, leave it out and keep next_step the same (re-ask). next_step: collect_contact_sharing.
+14c. collect_contact_sharing: extract 'contact_sharing_allowed' as boolean — true ONLY if the user clearly says yes (matched people can see their WhatsApp contact directly), false ONLY if they clearly say no (matched people must request approval first). If ambiguous, leave it out and keep next_step the same. If role='client' next_step: collect_client_brief_desc. If role='freelancer' next_step: collect_freelancer_brief_desc.
+14d. collect_client_brief_desc: extract EXACTLY the raw text of the user's message into 'brief_description'. Do not try to extract structured fields. next_step: completed.
 
 CRITICAL DATA COLLECTION RULE (overrides ALL edit detection):
 - Steps collect_freelancer_brief_desc, collect_client_brief_desc, and collect_project are PURE DATA COLLECTION steps. The user's ENTIRE message is their answer to the current question. No matter what words appear in the message (including words like "edit", "change", "update", "actually"), you MUST set edit_request.is_edit = false and extract the full message as the field value. These steps NEVER produce an edit request.
@@ -156,6 +159,12 @@ export async function extractConversationData({ step, role, tempData, messageTex
     currently_working:   'working_currently',
     working_status:      'working_currently',
     open_to_work:        'working_currently',
+    share_contact:       'contact_sharing_allowed',
+    contact_sharing:     'contact_sharing_allowed',
+    contact_allowed:     'contact_sharing_allowed',
+    show_contact:        'contact_sharing_allowed',
+    contact_visible:     'contact_sharing_allowed',
+    phone_visible:       'contact_sharing_allowed',
     profile_link:        'linkedin_url',
     linkedin:            'linkedin_url',
     linkedin_link:       'linkedin_url',
@@ -181,7 +190,7 @@ export async function extractConversationData({ step, role, tempData, messageTex
 
   // These two columns are booleans — Groq occasionally returns "yes"/"no"
   // strings, which would fail the Supabase insert.
-  const BOOLEAN_KEYS = new Set(['hiring_currently', 'working_currently']);
+  const BOOLEAN_KEYS = new Set(['hiring_currently', 'working_currently', 'contact_sharing_allowed']);
 
   const rawExtracted = parsed.extracted_data || {};
   const normalised = {};

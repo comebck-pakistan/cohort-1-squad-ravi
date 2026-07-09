@@ -123,6 +123,7 @@ export async function saveFreelancerProfile(phone, data) {
     availability:      data.availability      || null,
     preferences:       data.preferences       || null,
     working_currently: data.working_currently ?? null,
+    contact_sharing_allowed: data.contact_sharing_allowed ?? null,
     brief_description: data.brief_description || null,
     updated_at:        new Date().toISOString(),
   };
@@ -157,6 +158,7 @@ export async function saveJobRequest(phone, data) {
     deadline_normalized: data.deadline_normalized  || null,
     is_recurring:        data.is_recurring         ?? null,
     hiring_currently:    data.hiring_currently     ?? null,
+    contact_sharing_allowed: data.contact_sharing_allowed ?? null,
     brief_description:   data.brief_description    || null,
   };
 
@@ -223,6 +225,94 @@ export async function upsertMatches(rows) {
   }
   console.log(`[supabase] upsertMatches OK — ${data?.length ?? 0} row(s)`);
   return data || [];
+}
+
+export async function getRankedMatchesForPhone(phone, role) {
+  const field = role === 'freelancer' ? 'freelancer_phone' : 'client_phone';
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .eq(field, phone)
+    .order('total_score', { ascending: false, nullsFirst: false })
+    .order('compatibility_score', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('[supabase] getRankedMatchesForPhone FAILED:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+export async function findMatchById(id) {
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (error) {
+    console.error('[supabase] findMatchById FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data;
+}
+
+export async function findPendingContactRequest({ matchId, requesterPhone, targetPhone }) {
+  const { data, error } = await supabase
+    .from('contact_requests')
+    .select('*')
+    .eq('match_id', matchId)
+    .eq('requester_phone', requesterPhone)
+    .eq('target_phone', targetPhone)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error('[supabase] findPendingContactRequest FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function findLatestPendingContactApproval(targetPhone) {
+  const { data, error } = await supabase
+    .from('contact_requests')
+    .select('*')
+    .eq('target_phone', targetPhone)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error('[supabase] findLatestPendingContactApproval FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function createContactRequest(row) {
+  const { data, error } = await supabase
+    .from('contact_requests')
+    .insert(row)
+    .select()
+    .single();
+  if (error) {
+    console.error('[supabase] createContactRequest FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data;
+}
+
+export async function updateContactRequestStatus(id, status) {
+  const { data, error } = await supabase
+    .from('contact_requests')
+    .update({ status, responded_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) {
+    console.error('[supabase] updateContactRequestStatus FAILED:', JSON.stringify(error));
+    return null;
+  }
+  return data;
 }
 
 export async function insertNotifications(rows) {

@@ -112,6 +112,11 @@ const questions = {
     "One quick thing — is this an active hire right now, or are you just planning ahead? (yes = hiring now)",
     "Before the last step: are you currently hiring for this project? A simple yes or no works!",
   ],
+  collect_contact_sharing: [
+    "Do you want matched people to see your WhatsApp contact directly? (yes/no) If you say no, they'll have to request it and I'll ask you first.",
+    "Should I show your WhatsApp contact to approved matches automatically? (yes/no) If not, I'll only share it after you approve.",
+    "Contact privacy check: can matched people see your WhatsApp number directly? A simple yes or no works.",
+  ],
 };
 
 // ── Niche-aware preferences variants ────────────────────────────────────────

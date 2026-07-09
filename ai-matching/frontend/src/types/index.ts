@@ -15,6 +15,7 @@ export interface FreelancerProfile {
   rate: string | null;
   availability: string | null;
   preferences: string | null;
+  contact_sharing_allowed: boolean | null;
   bio: string | null;
   avatar_url: string | null;
   languages: string[] | null;
@@ -41,6 +42,7 @@ export interface ClientProfile {
   project_count: number | null;
   deadline: string | null;
   deadline_date: string | null;
+  contact_sharing_allowed: boolean | null;
   role: 'client';
   created_at: string;
   updated_at: string;

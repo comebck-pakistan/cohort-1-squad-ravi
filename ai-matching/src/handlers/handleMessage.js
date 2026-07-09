@@ -25,6 +25,11 @@ import { sendWhatsAppMessage } from '../whatsapp.js';
 import { isAckOnly, parseDeadlineLocally, parseYesNoLocally, ensureDeadlineNormalized } from '../deadline.js';
 import { runMatchingForClient, runMatchingForFreelancer } from '../matching.js';
 import { classifyLinkField, extractFirstUrl, revetArtifact, runVettingForFreelancer } from '../vetting.js';
+import {
+  handlePendingContactApproval,
+  parseContactRequestCommand,
+  requestContactForMatchRank,
+} from '../contactRequests.js';
 
 const RESET_PHRASES = ['reset ai', 'reset bot'];
 
@@ -33,13 +38,22 @@ const RESET_PHRASES = ['reset ai', 'reset bot'];
 // in matching; flipping to "no" removes their matches, flipping to "yes"
 // re-runs matching for them.
 const YESNO_STEPS = {
-  collect_hiring_status:  { field: 'hiring_currently',  next: 'collect_client_brief_desc' },
-  collect_working_status: { field: 'working_currently', next: 'collect_freelancer_brief_desc' },
+  collect_hiring_status:  { field: 'hiring_currently',  next: 'collect_contact_sharing' },
+  collect_working_status: { field: 'working_currently', next: 'collect_contact_sharing' },
+  collect_contact_sharing: {
+    field: 'contact_sharing_allowed',
+    nextByRole: {
+      client: 'collect_client_brief_desc',
+      freelancer: 'collect_freelancer_brief_desc',
+    },
+  },
 };
-const FLAG_FIELDS = new Set(['hiring_currently', 'working_currently']);
+const BOOLEAN_FIELDS = new Set(['hiring_currently', 'working_currently', 'contact_sharing_allowed']);
+const MATCH_STATUS_FIELDS = new Set(['hiring_currently', 'working_currently']);
 const FLAG_QUESTIONS = {
   hiring_currently:  'are you currently hiring?',
   working_currently: 'are you currently open to work?',
+  contact_sharing_allowed: 'can matched people see your WhatsApp contact directly?',
 };
 const LINK_STEPS = {
   collect_profile_link:  { field: 'linkedin_url', next: 'collect_github' }, // legacy alias
@@ -77,6 +91,11 @@ async function applyFlagSideEffects(phone, field, value) {
   }
 }
 
+function nextStepForYesNo(stepConfig, role) {
+  if (stepConfig.nextByRole) return stepConfig.nextByRole[role] || 'welcome';
+  return stepConfig.next;
+}
+
 async function applyLinkSideEffects(phone, field) {
   if (!LINK_FIELDS.has(field)) return;
   try {
@@ -107,6 +126,22 @@ export async function handleIncomingMessage({ phone, messageText }) {
   if (RESET_PHRASES.some((phrase) => lowerText.includes(phrase))) {
     await resetUser(phone);
     await sendWhatsAppMessage(phone, getResetReply());
+    return;
+  }
+
+  // --- 1a. CONTACT REQUEST APPROVAL / REQUEST COMMANDS (local — NO Groq call) ---
+  if (await handlePendingContactApproval({ phone, messageText })) {
+    return;
+  }
+
+  const contactCommand = parseContactRequestCommand(messageText);
+  if (contactCommand) {
+    const requesterRole = freelancer ? 'freelancer' : conversation?.role;
+    await requestContactForMatchRank({
+      requesterPhone: phone,
+      requesterRole,
+      rank: contactCommand.rank,
+    });
     return;
   }
 
@@ -153,7 +188,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
       // Flag fields are booleans — coerce a yes/no answer, and re-ask instead
       // of storing free text when the answer isn't a clear yes or no.
-      if (FLAG_FIELDS.has(editingField)) {
+      if (BOOLEAN_FIELDS.has(editingField)) {
         const parsed = parseYesNoLocally(newValue);
         if (parsed === null) {
           await sendWhatsAppMessage(phone, `Just a quick yes or no — ${FLAG_QUESTIONS[editingField]}`);
@@ -183,7 +218,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
       }
 
       await sendWhatsAppMessage(phone, pickEditSuccessReply(editingField, formatFieldValue(newValue)));
-      if (FLAG_FIELDS.has(editingField)) {
+      if (MATCH_STATUS_FIELDS.has(editingField)) {
         await applyFlagSideEffects(phone, editingField, newValue);
       }
       if (freelancer && LINK_FIELDS.has(editingField)) {
@@ -251,7 +286,9 @@ export async function handleIncomingMessage({ phone, messageText }) {
   if (YESNO_STEPS[conversation?.step]) {
     const parsed = parseYesNoLocally(messageText);
     if (parsed !== null) {
-      const { field, next } = YESNO_STEPS[conversation.step];
+      const stepConfig = YESNO_STEPS[conversation.step];
+      const { field } = stepConfig;
+      const next = nextStepForYesNo(stepConfig, conversation.role);
       await saveConversation({
         id: conversation.id,
         phone,
@@ -341,7 +378,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
     // Flag fields are booleans — coerce a provided yes/no value. If it isn't a
     // clear yes/no, null it out so the ask-for-value branch below takes over.
-    if (field && FLAG_FIELDS.has(field) && value != null) {
+    if (field && BOOLEAN_FIELDS.has(field) && value != null && typeof value !== 'boolean') {
       value = parseYesNoLocally(String(value));
     }
 
@@ -364,7 +401,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
       }
 
       await sendWhatsAppMessage(phone, pickEditSuccessReply(field, formatFieldValue(value)));
-      if (FLAG_FIELDS.has(field)) {
+      if (MATCH_STATUS_FIELDS.has(field)) {
         await applyFlagSideEffects(phone, field, value);
       }
       if (freelancer && LINK_FIELDS.has(field)) {

@@ -27,6 +27,7 @@ create table if not exists freelancers (
   availability text,
   preferences text,
   working_currently boolean,
+  contact_sharing_allowed boolean,
   brief_description text,
   trust_score int,
   trust_tier text,
@@ -50,6 +51,7 @@ create table if not exists job_requests (
   deadline_normalized text,
   is_recurring boolean,
   hiring_currently boolean,
+  contact_sharing_allowed boolean,
   brief_description text,
   created_at timestamp default now(),
   unique (phone)
@@ -104,6 +106,18 @@ create table if not exists vetting_checks (
   checked_at timestamptz default now()
 );
 
+create table if not exists contact_requests (
+  id bigint generated always as identity primary key,
+  match_id bigint not null references matches(id) on delete cascade,
+  requester_phone text not null,
+  requester_role text not null,
+  target_phone text not null,
+  target_role text not null,
+  status text not null default 'pending',
+  created_at timestamptz default now(),
+  responded_at timestamptz
+);
+
 alter table freelancers add column if not exists profile_link text;
 alter table freelancers add column if not exists linkedin_url text;
 alter table freelancers add column if not exists github_url text;
@@ -116,6 +130,7 @@ alter table freelancers add column if not exists rate text;
 alter table freelancers add column if not exists availability text;
 alter table freelancers add column if not exists preferences text;
 alter table freelancers add column if not exists working_currently boolean;
+alter table freelancers add column if not exists contact_sharing_allowed boolean;
 alter table freelancers add column if not exists brief_description text;
 alter table freelancers add column if not exists trust_score int;
 alter table freelancers add column if not exists trust_tier text;
@@ -134,6 +149,7 @@ alter table job_requests add column if not exists deadline text;
 alter table job_requests add column if not exists deadline_normalized text;
 alter table job_requests add column if not exists is_recurring boolean;
 alter table job_requests add column if not exists hiring_currently boolean;
+alter table job_requests add column if not exists contact_sharing_allowed boolean;
 alter table job_requests add column if not exists brief_description text;
 
 alter table matches add column if not exists trust_score int;

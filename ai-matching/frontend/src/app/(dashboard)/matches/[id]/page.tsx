@@ -69,6 +69,7 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
   const score = match.total_score ?? match.compatibility_score;
   const skillScore = match.compatibility_score;
   const trustScore = match.trust_score ?? match.freelancer?.trust_score ?? 0;
+  const canContactFreelancer = match.freelancer?.contact_sharing_allowed === true;
 
   const radarData = [
     { axis: 'Skills', value: Math.min(100, skillScore + (match.skills_overlap?.length ?? 0) * 5) },
@@ -232,15 +233,24 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
         <div className="glass-card p-6 flex items-center justify-between gap-4 flex-wrap border-emerald-500/20 bg-emerald-500/5">
           <div>
             <h3 className="font-semibold text-white mb-1">Ready to connect?</h3>
-            <p className="text-sm text-white/50">Reach out directly through WhatsApp</p>
+            <p className="text-sm text-white/50">
+              {canContactFreelancer ? 'Reach out directly through WhatsApp' : 'This contact is private. Request approval through the WhatsApp bot.'}
+            </p>
           </div>
-          <a href={getWhatsAppLink(match.freelancer?.phone, `Hi ${match.freelancer?.name ?? ''}, I found your profile on AI Matchmaker and I\'d love to discuss a potential project!`)}
-            target="_blank" rel="noopener noreferrer">
-            <Button variant="whatsapp" size="lg" className="gap-2">
+          {canContactFreelancer ? (
+            <a href={getWhatsAppLink(match.freelancer?.phone, `Hi ${match.freelancer?.name ?? ''}, I found your profile on AI Matchmaker and I\'d love to discuss a potential project!`)}
+              target="_blank" rel="noopener noreferrer">
+              <Button variant="whatsapp" size="lg" className="gap-2">
+                <MessageCircle className="w-5 h-5" />
+                Contact via WhatsApp
+              </Button>
+            </a>
+          ) : (
+            <Button variant="secondary" size="lg" className="gap-2" disabled>
               <MessageCircle className="w-5 h-5" />
-              Contact via WhatsApp
+              Contact Private
             </Button>
-          </a>
+          )}
         </div>
       </motion.div>
     </div>

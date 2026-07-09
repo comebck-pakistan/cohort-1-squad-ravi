@@ -263,6 +263,25 @@ function shortProjectLine(job) {
   return desc.length > 120 ? `${desc.slice(0, 117)}...` : desc;
 }
 
+function whatsappLink(phone) {
+  const cleaned = String(phone || '').replace(/\D/g, '');
+  return cleaned ? `wa.me/${cleaned}` : 'contact unavailable';
+}
+
+function contactLineForRank(profile, rank) {
+  if (profile?.contact_sharing_allowed === true) {
+    return `📱 Contact: ${whatsappLink(profile.phone)}`;
+  }
+  return `🔒 Contact hidden. Reply "request contact ${rank}" and I'll ask them first.`;
+}
+
+function hiddenContactNote(profile, roleLabel) {
+  if (profile?.contact_sharing_allowed === true) {
+    return `📱 ${roleLabel} contact: ${whatsappLink(profile.phone)}\n`;
+  }
+  return `🔒 ${roleLabel} contact is private for now.\n`;
+}
+
 function scoreFreelancersForJob(job, freelancers) {
   return freelancers
     .filter((f) => f.phone !== job.phone)
@@ -337,12 +356,12 @@ export async function runMatchingForClient(clientPhone) {
     .map((c, i) => {
       const f = c.freelancer;
       const skills = c.skills_overlap.length > 0 ? c.skills_overlap.join(', ') : (f.skills || 'profile on file');
-      return `${i + 1}. *${f.name || 'Freelancer'}* — Overall ${c.total_score}% · Skill ${c.score}% · Trust ${c.trust_score ?? 0}\n   ${skills}${f.rate ? ` · ${f.rate}` : ''}\n   📱 wa.me/${String(f.phone).replace(/\D/g, '')}`;
+      return `${i + 1}. *${f.name || 'Freelancer'}* — Overall ${c.total_score}% · Skill ${c.score}% · Trust ${c.trust_score ?? 0}\n   ${skills}${f.rate ? ` · ${f.rate}` : ''}\n   ${contactLineForRank(f, i + 1)}`;
     })
     .join('\n\n');
   await sendWhatsAppMessage(
     clientPhone,
-    `🎯 Great news${job.name ? `, ${job.name}` : ''}! I found ${analysed.length} freelancer${analysed.length > 1 ? 's' : ''} for your project:\n\n${list}\n\nFeel free to reach out to them directly — I've let them know about your project too. 🤝`
+    `🎯 Great news${job.name ? `, ${job.name}` : ''}! I found ${analysed.length} freelancer${analysed.length > 1 ? 's' : ''} for your project:\n\n${list}\n\nUse direct contact links where shown. For hidden contacts, reply with the request command and I'll ask them first. 🤝`
   );
 
   // ...and a heads-up to each matched freelancer. These can fail if the
@@ -351,7 +370,7 @@ export async function runMatchingForClient(clientPhone) {
   for (const c of analysed) {
     await sendWhatsAppMessage(
       c.freelancer.phone,
-      `🎉 New project match, ${c.freelancer.name || 'there'}!\n\n*${job.name || 'A client'}* needs: ${projectLine}\n${job.budget_project || job.budget_hourly ? `💰 Budget: ${job.budget_project || job.budget_hourly}\n` : ''}${job.deadline ? `⏰ Timeline: ${job.deadline}\n` : ''}\nIt's a ${c.score}% skill match with your profile — I've shared your details with them, so they may reach out here on WhatsApp soon!`
+      `🎉 New project match, ${c.freelancer.name || 'there'}!\n\n*${job.name || 'A client'}* needs: ${projectLine}\n${job.budget_project || job.budget_hourly ? `💰 Budget: ${job.budget_project || job.budget_hourly}\n` : ''}${job.deadline ? `⏰ Timeline: ${job.deadline}\n` : ''}${hiddenContactNote(job, 'Client')}It's a ${c.score}% skill match with your profile. ${c.freelancer.contact_sharing_allowed === true ? "I've shared your contact with the client, so they may reach out here on WhatsApp soon!" : "I have not shared your contact; if the client asks for it, I'll request your approval first."}`
     );
   }
 }
@@ -442,7 +461,7 @@ export async function runMatchingForFreelancer(freelancerPhone) {
   ]);
 
   const list = analysed
-    .map((m, i) => `${i + 1}. ${shortProjectLine(m.job)} — Overall ${m.total_score}% · Skill ${m.score}% · Trust ${m.trust_score ?? 0}${m.job.budget_project || m.job.budget_hourly ? ` · 💰 ${m.job.budget_project || m.job.budget_hourly}` : ''}`)
+    .map((m, i) => `${i + 1}. ${shortProjectLine(m.job)} — Overall ${m.total_score}% · Skill ${m.score}% · Trust ${m.trust_score ?? 0}${m.job.budget_project || m.job.budget_hourly ? ` · 💰 ${m.job.budget_project || m.job.budget_hourly}` : ''}\n   ${contactLineForRank(m.job, i + 1)}`)
     .join('\n');
   await sendWhatsAppMessage(
     freelancerPhone,

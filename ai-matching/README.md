@@ -50,6 +50,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 | `src/handlers/handleMessage.js` | The whole conversation flow / step machine |
 | `src/groq.js` | The Groq calls + system prompts (data extraction, match analysis, vetting analysis) |
 | `src/matching.js` | The matching engine: skill scoring, trust-weighted match rows, notifications, insights |
+| `src/contactRequests.js` | Contact privacy requests and approval/decline replies |
 | `src/vetting.js` | Automated freelancer link checks, skill-proof Trust Score, broken-link re-vets |
 | `src/deadline.js` | Local (zero-API) parsers: deadlines, ack words, yes/no answers |
 | `src/replies.js` | The randomized question bank |
@@ -63,10 +64,12 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 When a conversation reaches `completed`, the bot sends the usual "All done! 🎉" reply and then runs matching:
 
-- **Client completes** → every registered freelancer is scored against the new job request. The top 5 (score ≥ 35%) are written to `matches`, both sides get a `notifications` row, the client gets a WhatsApp summary listing the matched freelancers (with contact links), and each matched freelancer gets a WhatsApp heads-up about the project.
+- **Client completes** → every registered freelancer is scored against the new job request. The top 5 (score ≥ 35%) are written to `matches`, both sides get a `notifications` row, the client gets a WhatsApp summary listing the matched freelancers, and each matched freelancer gets a WhatsApp heads-up about the project.
 - **Freelancer completes** → every open job request is scored against the new profile. Top matches are written to `matches`, the freelancer gets a WhatsApp summary of matching projects, clients get in-app notifications (no WhatsApp blast), and the freelancer's dashboard `insights` are regenerated.
 
 **Hiring / Working status gate:** onboarding asks clients "are you actively hiring right now?" (`hiring_currently`) and freelancers "are you currently open to work?" (`working_currently`). Only users who answered **yes** take part in matching — inactive clients aren't shown to freelancers and vice versa. Users can flip the flag anytime via the edit flow ("change my hiring status" / "change my working status"): flipping to *no* deletes their match rows (so they stop being displayed on the dashboard), flipping to *yes* re-runs matching immediately. Clear yes/no answers are parsed locally (including haan/ji/nahi) with no API call; only ambiguous answers go to Groq.
+
+**Contact privacy:** onboarding asks both roles whether matched people can see their WhatsApp contact directly (`contact_sharing_allowed`). If the answer is **yes**, ranked match messages include the `wa.me/...` contact link. If **no** or unanswered, ranked match messages show `Contact hidden` plus a command such as `request contact 2`. That command creates a `contact_requests` row and asks the matched user for approval over WhatsApp; only a clear yes shares the contact in a new message. Clear yes/no answers are parsed locally, and contact request/approval commands do not call Groq.
 
 **Skill scoring is 100% local (no API calls):** skills overlap (55%) via a curated keyword dictionary matched against skills/tools/descriptions, budget fit (25%) comparing the client's hourly budget to the freelancer's rate, and availability fit (20%) comparing parsed hours/week to what the hire type needs. One batched Groq call per run then generates the `ai_explanation` / `potential_risks` / `recommended_action` text shown in the dashboard — if Groq is down or rate-limited, deterministic fallback text is used so matches are still written.
 
@@ -184,6 +187,7 @@ create table if not exists freelancers (
   availability text,
   preferences text,
   working_currently boolean,
+  contact_sharing_allowed boolean,
   brief_description text,
   trust_score int,
   trust_tier text,
@@ -208,6 +212,7 @@ create table if not exists job_requests (
   deadline_normalized text,
   is_recurring boolean,
   hiring_currently boolean,
+  contact_sharing_allowed boolean,
   brief_description text,
   created_at timestamp default now(),
   unique (phone)
@@ -267,6 +272,19 @@ create table if not exists vetting_checks (
   evidence jsonb,
   checked_at timestamptz default now()
 );
+
+-- Contact sharing approval requests
+create table if not exists contact_requests (
+  id bigint generated always as identity primary key,
+  match_id bigint not null references matches(id) on delete cascade,
+  requester_phone text not null,
+  requester_role text not null,
+  target_phone text not null,
+  target_role text not null,
+  status text not null default 'pending',
+  created_at timestamptz default now(),
+  responded_at timestamptz
+);
 ```
 
 **Already have the old tables?** Run this migration instead of dropping anything — it adds the missing column and the three new tables (the `create table if not exists` statements above are safe to re-run too):
@@ -275,6 +293,7 @@ create table if not exists vetting_checks (
 alter table freelancers add column if not exists brief_description text;
 alter table freelancers add column if not exists updated_at timestamptz default now();
 alter table freelancers add column if not exists working_currently boolean;
+alter table freelancers add column if not exists contact_sharing_allowed boolean;
 alter table freelancers add column if not exists linkedin_url text;
 alter table freelancers add column if not exists github_url text;
 alter table freelancers add column if not exists cv_url text;
@@ -284,6 +303,7 @@ alter table freelancers add column if not exists trust_tier text;
 alter table freelancers add column if not exists trust_breakdown jsonb;
 alter table freelancers add column if not exists vetted_at timestamptz;
 alter table job_requests add column if not exists hiring_currently boolean;
+alter table job_requests add column if not exists contact_sharing_allowed boolean;
 alter table matches add column if not exists trust_score int;
 alter table matches add column if not exists total_score int;
 
@@ -296,6 +316,17 @@ create table if not exists vetting_checks (
   evidence jsonb,
   checked_at timestamptz default now()
 );
+create table if not exists contact_requests (
+  id bigint generated always as identity primary key,
+  match_id bigint not null references matches(id) on delete cascade,
+  requester_phone text not null,
+  requester_role text not null,
+  target_phone text not null,
+  target_role text not null,
+  status text not null default 'pending',
+  created_at timestamptz default now(),
+  responded_at timestamptz
+);
 -- then run the `matches`, `notifications`, and `insights` create statements above
 
 -- OPTIONAL: users registered before the hiring/working status feature have
@@ -303,6 +334,9 @@ create table if not exists vetting_checks (
 -- grandfather them in as active instead:
 -- update freelancers set working_currently = true where working_currently is null;
 -- update job_requests set hiring_currently = true where hiring_currently is null;
+
+-- Contact privacy defaults safe: NULL contact_sharing_allowed is treated as
+-- private. Only set it true if the user explicitly allows direct sharing.
 ```
  
 **Checking your database anytime later** — instead of clicking through each table tab, run this to see every table and column at once:

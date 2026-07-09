@@ -52,6 +52,7 @@ export function useClientProfile(phone: string | null) {
         project_count: td?.project_count as number ?? null,
         deadline: td?.deadline as string ?? null,
         deadline_date: td?.deadline_date as string ?? null,
+        contact_sharing_allowed: td?.contact_sharing_allowed as boolean ?? null,
         role: 'client' as const,
         created_at: data.updated_at,
         updated_at: data.updated_at,
