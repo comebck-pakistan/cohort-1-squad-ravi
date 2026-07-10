@@ -187,3 +187,30 @@ function processGlobalOrLocalEscrow(incomingMessage, senderPhone, activeMatchRow
 if (typeof module !== 'undefined' && module.exports) {
     module.exports.processGlobalOrLocalEscrow = processGlobalOrLocalEscrow;
 }
+
+
+// Autonomous Maya AI QA Router Hook (Noor's Contribution)
+const qaInspector = require('./qaInspector');
+
+async function interceptFreelancerDelivery(incomingMessage, activeJobScope, groqInstance) {
+    if (incomingMessage.toLowerCase().includes('completed') || incomingMessage.includes('submit')) {
+        let qaReport = await qaInspector.runAutomatedScopeReview(incomingMessage, activeJobScope, groqInstance);
+        
+        if (qaReport.status === 'failed_qa') {
+            return {
+                target: 'freelancer',
+                message: `⚠️ Maya QA Review Note: Aapki submission check ki gayi hai aur usme kuch cheezain missing hain.\nFeedback: ${qaReport.feedback}\n\nPlease update your files and submit again to unlock client escrow!`
+            };
+        } else {
+            return {
+                target: 'client',
+                message: `✅ Maya QA Shield Verified! Freelancer has completed all scope requirements perfectly.\nFeedback: ${qaReport.feedback}\n\nEscrow milestone payment release karne ke liye '1' ya 'release payment' reply karein.`
+            };
+        }
+    }
+    return null;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports.interceptFreelancerDelivery = interceptFreelancerDelivery;
+}
