@@ -388,3 +388,27 @@ module.exports = {
     ...module.exports,
     localizedOnboardingReplies
 };
+
+
+// Premium Multilingual Conversational Matrix (Noor's Core Contribution)
+const fullyLocalizedAppReplies = {
+    english: {
+        welcome: "Welcome to Pukaar! Let's build your profile. First, what is your full name?",
+        askSkills: "Great! Please list your primary professional skills (comma-separated):",
+        onboardingComplete: "Registration complete! 🚀 Our matching engine is actively scanning positions.",
+        matchAlert: (title, score) => `🔥 New Match Found: ${title}\nCompatibility Score: ${score}%\n\nReply '1' or 'interested' to proceed.\nReply '2' or 'decline' to pass.`,
+        contactRequestPrompt: "The client has requested your WhatsApp contact details. Reply 'yes' to share or 'no' to keep it private."
+    },
+    roman_urdu: {
+        welcome: "Pukaar App par khushamdeed! Aiye aapka profile banate hain. Sab se pehle, aapka poora naam kya hai?",
+        askSkills: "Zabardast! Apni khusoosi maharat (skills) likhein (jaise: React, UI/UX, Graphic Design):",
+        onboardingComplete: "Aapki registration mukammal ho chuki hai! 🚀 Hamara system aapke liye best matches dhoond raha hai.",
+        matchAlert: (title, score) => `🔥 Naya Match Mila Hai: ${title}\nCompatibility Score: ${score}%\n\nAage barhne ke liye '1' ya 'interested' ka jawab dein.\nReject karne ke liye '2' ya 'decline' ka jawab dein.`,
+        contactRequestPrompt: "Client aapka WhatsApp contact number mang raha hai. Ijazat dene ke liye 'yes' likhein ya ijazat na dene ke liye 'no' likhein."
+    }
+};
+
+module.exports = {
+    ...module.exports,
+    fullyLocalizedAppReplies
+};
