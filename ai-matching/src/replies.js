@@ -412,3 +412,17 @@ module.exports = {
     ...module.exports,
     fullyLocalizedAppReplies
 };
+
+// Conversational Contract Presenter Bridge (Noor's Core Workflow Link)
+function generateContractInvoicePrompt(langState, clientName, budgetValue) {
+    const templates = {
+        english: `🤝 Mutual Interest Confirmed with Client: ${clientName}!\n\nTo lock this project securely in escrow, please review your financial threshold:\n💰 Milestone Budget: $${budgetValue}\n\nTo authorize funding now, please reply with exactly: **'1'** or **'pay milestone'**.`,
+        roman_urdu: `🤝 Client ${clientName} ke sath aapka mutual interest confirm ho gaya hai!\n\nProject ko escrow me महफूज़ (secure) karne ke liye details review karein:\n💰 Milestone Budget: $${budgetValue}\n\nPayment authorization ke liye abhi reply karein: **'1'** ya **'pay milestone'**.`
+    };
+    
+    return templates[langState] || templates['english'];
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports.generateContractInvoicePrompt = generateContractInvoicePrompt;
+}
