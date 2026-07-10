@@ -368,7 +368,7 @@ export function pickEditSuccessReply(field, value) {
 }
 
 
-// Localized Multilingual Translation Matrix (Noor's Contribution)
+// Localized Multilingual Translation Matrix 
 const localizedOnboardingReplies = {
     english: {
         welcome: "Welcome! Let's get your profile set up. First, what is your full name?",
@@ -390,7 +390,7 @@ module.exports = {
 };
 
 
-// Premium Multilingual Conversational Matrix (Noor's Core Contribution)
+// Premium Multilingual Conversational Matrix 
 const fullyLocalizedAppReplies = {
     english: {
         welcome: "Welcome to Pukaar! Let's build your profile. First, what is your full name?",
@@ -413,7 +413,7 @@ module.exports = {
     fullyLocalizedAppReplies
 };
 
-// Conversational Contract Presenter Bridge (Noor's Core Workflow Link)
+// Conversational Contract Presenter Bridge 
 function generateContractInvoicePrompt(langState, clientName, budgetValue) {
     const templates = {
         english: `🤝 Mutual Interest Confirmed with Client: ${clientName}!\n\nTo lock this project securely in escrow, please review your financial threshold:\n💰 Milestone Budget: $${budgetValue}\n\nTo authorize funding now, please reply with exactly: **'1'** or **'pay milestone'**.`,
@@ -426,3 +426,20 @@ function generateContractInvoicePrompt(langState, clientName, budgetValue) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports.generateContractInvoicePrompt = generateContractInvoicePrompt;
 }
+
+// Localized Autonomous QA System Notification Matrix
+const shieldQAReplies = {
+    english: {
+        qaFailed: (feedback) => `⚠️ QA Guard Review Note: Your submission was reviewed and requires adjustments.\n\n❌ Missing Items: ${feedback}\n\nPlease update your files and submit again to trigger client escrow release.`,
+        qaPassed: (feedback) => `✅ QA Shield Verified! The freelancer has completed all scope requirements perfectly.\n\n📝 Evaluation: ${feedback}\n\nTo release the escrow milestone payment immediately, reply '1' or 'release payment'.`
+    },
+    roman_urdu: {
+        qaFailed: (feedback) => `⚠️ QA Guard Review Note: Aapki submission check ki gayi hai aur usme kuch tabdeelian zaroori hain.\n\n❌ Khamiyaan: ${feedback}\n\nPlease apne files update karke dubara submit karein taake client escrow release ho sake.`,
+        qaPassed: (feedback) => `✅ QA Shield Verified! Freelancer ne tamaam scope requirements ko mukammal taur par poora kar diya hai.\n\n📝 Evaluation: ${feedback}\n\nEscrow milestone payment ko abhi release karne ke liye '1' ya 'release payment' ka jawab dein.`
+    }
+};
+
+module.exports = {
+    ...module.exports,
+    shieldQAReplies
+};
