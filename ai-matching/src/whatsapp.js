@@ -64,7 +64,7 @@ export async function markAsReadAndTyping(messageId) {
 }
 
 
-// Advanced Roman Urdu Context & Lifecycle Command Interpreter (Noor's Contribution)
+// Advanced Roman Urdu Context & Lifecycle Command Interpreter 
 function coreCommandNormalizer(incomingText, sessionState = {}) {
     if (!incomingText) return incomingText;
     let cleanText = incomingText.toLowerCase().trim();
@@ -111,7 +111,7 @@ if (typeof module !== 'undefined') {
 }
 
 
-// Autonomous Multi-Language Controller & AI Fallback Engine (Noor's Core Contribution)
+// Autonomous Multi-Language Controller & AI Fallback Engine 
 async function bulletproofMessageRouter(incomingText, sessionState = {}, groqClient = null) {
     if (!incomingText) return { text: incomingText, isAiFallback: false };
     let cleanText = incomingText.toLowerCase().trim();
@@ -173,7 +173,7 @@ if (typeof module !== 'undefined') {
     module.exports.bulletproofMessageRouter = bulletproofMessageRouter;
 }
 
-// Multi-Gateway Payment Escrow Hook (Noor's Contribution)
+// Multi-Gateway Payment Escrow Hook 
 const adaptivePayments = require('./adaptivePayments');
 
 function processGlobalOrLocalEscrow(incomingMessage, senderPhone, activeMatchRow) {
@@ -188,8 +188,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports.processGlobalOrLocalEscrow = processGlobalOrLocalEscrow;
 }
 
-
-// Autonomous Maya AI QA Router Hook (Noor's Contribution)
+// Autonomous Project QA Router Hook 
 const qaInspector = require('./qaInspector');
 
 async function interceptFreelancerDelivery(incomingMessage, activeJobScope, groqInstance) {
@@ -199,12 +198,12 @@ async function interceptFreelancerDelivery(incomingMessage, activeJobScope, groq
         if (qaReport.status === 'failed_qa') {
             return {
                 target: 'freelancer',
-                message: `⚠️ Maya QA Review Note: Aapki submission check ki gayi hai aur usme kuch cheezain missing hain.\nFeedback: ${qaReport.feedback}\n\nPlease update your files and submit again to unlock client escrow!`
+                message: `⚠️ QA Guard Review Note: Aapki submission check ki gayi hai aur usme kuch cheezain missing hain.\nFeedback: ${qaReport.feedback}\n\nPlease update your files and submit again to unlock client escrow!`
             };
         } else {
             return {
                 target: 'client',
-                message: `✅ Maya QA Shield Verified! Freelancer has completed all scope requirements perfectly.\nFeedback: ${qaReport.feedback}\n\nEscrow milestone payment release karne ke liye '1' ya 'release payment' reply karein.`
+                message: `✅ QA Shield Verified! Freelancer has completed all scope requirements perfectly.\nFeedback: ${qaReport.feedback}\n\nEscrow milestone payment release karne ke liye '1' ya 'release payment' reply karein.`
             };
         }
     }
@@ -214,3 +213,4 @@ async function interceptFreelancerDelivery(incomingMessage, activeJobScope, groq
 if (typeof module !== 'undefined' && module.exports) {
     module.exports.interceptFreelancerDelivery = interceptFreelancerDelivery;
 }
+
