@@ -172,3 +172,18 @@ async function bulletproofMessageRouter(incomingText, sessionState = {}, groqCli
 if (typeof module !== 'undefined') {
     module.exports.bulletproofMessageRouter = bulletproofMessageRouter;
 }
+
+// Multi-Gateway Payment Escrow Hook (Noor's Contribution)
+const adaptivePayments = require('./adaptivePayments');
+
+function processGlobalOrLocalEscrow(incomingMessage, senderPhone, activeMatchRow) {
+    if (activeMatchRow.status === 'mutual_interest') {
+        return adaptivePayments.routeAdaptiveMilestone(incomingMessage, senderPhone, activeMatchRow);
+    }
+    // Safe pass-through if match status is not in escrow stage
+    return null;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports.processGlobalOrLocalEscrow = processGlobalOrLocalEscrow;
+}
