@@ -109,3 +109,66 @@ function coreCommandNormalizer(incomingText, sessionState = {}) {
 if (typeof module !== 'undefined') {
     module.exports.coreCommandNormalizer = coreCommandNormalizer;
 }
+
+
+// Autonomous Multi-Language Controller & AI Fallback Engine (Noor's Core Contribution)
+async function bulletproofMessageRouter(incomingText, sessionState = {}, groqClient = null) {
+    if (!incomingText) return { text: incomingText, isAiFallback: false };
+    let cleanText = incomingText.toLowerCase().trim();
+
+    // 1. Establish/Maintain Language Track State
+    if (!sessionState.preferred_language) {
+        sessionState.preferred_language = 'english'; // Default fallback setting
+    }
+    if (cleanText === '1' || cleanText === 'choose english') {
+        sessionState.preferred_language = 'english';
+        return { text: 'english_selected', isAiFallback: false };
+    }
+    if (cleanText === '2' || cleanText === 'choose urdu' || cleanText.includes('urdu')) {
+        sessionState.preferred_language = 'roman_urdu';
+        return { text: 'urdu_selected', isAiFallback: false };
+    }
+
+    // 2. Deterministic Command Processing (The Loophole-Free Check)
+    const exactCommands = {
+        'yes': 'yes', 'haan': 'yes', 'ji': 'yes', 'theek hai': 'yes',
+        'no': 'no', 'nahi': 'no', 'na': 'no', 'radd': 'no',
+        'interested': 'interested', 'dilchaspi': 'interested',
+        'decline': 'decline', 'mana': 'decline'
+    };
+
+    if (exactCommands[cleanText]) {
+        return { text: exactCommands[cleanText], isAiFallback: false };
+    }
+
+    // 3. Advanced AI Fallback Processing (Dynamic Slang Translator Layer)
+    // If the input doesn't match an exact word, pass it to Groq to extract user intent safely
+    if (groqClient) {
+        try {
+            const aiTranslationResponse = await groqClient.chat.completions.create({
+                messages: [{
+                    role: "system",
+                    content: "You are a specialized conversational intent mapping API. Analyze the incoming informal Roman Urdu or English user text and map it strictly to one of these system keywords: 'yes', 'no', 'interested', 'decline'. If it matches none, output 'unrecognized'."
+                }, {
+                    role: "user",
+                    content: incomingText
+                }],
+                model: "llama3-8b-8192", // Utilizing team's active saving model configuration
+                temperature: 0.1
+            });
+
+            let extractedIntent = aiTranslationResponse.choices[0].message.content.toLowerCase().trim();
+            if (['yes', 'no', 'interested', 'decline'].includes(extractedIntent)) {
+                return { text: extractedIntent, isAiFallback: true };
+            }
+        } catch (error) {
+            console.error("AI Fallback Routing failed, deploying deterministic logic:", error);
+        }
+    }
+
+    return { text: incomingText, isAiFallback: false }; // Safe string pass-through
+}
+
+if (typeof module !== 'undefined') {
+    module.exports.bulletproofMessageRouter = bulletproofMessageRouter;
+}
