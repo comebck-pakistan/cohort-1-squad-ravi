@@ -1,4 +1,4 @@
-// Premium Multi-Gateway Adaptive Payment Router (Noor's Core Moat Feature)
+// Premium Multi-Gateway Adaptive Payment Router 
 function routeAdaptiveMilestone(commandText, userPhoneNumber, matchState) {
     if (!commandText) return null;
     let input = commandText.toLowerCase().trim();
@@ -38,6 +38,5 @@ function routeAdaptiveMilestone(commandText, userPhoneNumber, matchState) {
     return null;
 }
 
-if (typeof module !== 'undefined') {
-    module.exports.routeAdaptiveMilestone = routeAdaptiveMilestone;
-}
+export { routeAdaptiveMilestone };
+
