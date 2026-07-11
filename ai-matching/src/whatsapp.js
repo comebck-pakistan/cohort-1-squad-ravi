@@ -214,3 +214,16 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports.interceptFreelancerDelivery = interceptFreelancerDelivery;
 }
 
+// Autonomous Scope Interview Trigger Hook (Noor's Contribution)
+const scopeNegotiator = require('./scopeNegotiator');
+
+async function checkInterviewGateway(incomingText, sessionMatchRow, groqInstance) {
+    if (sessionMatchRow.status === 'matched' && !sessionMatchRow.interview_step) {
+        return await scopeNegotiator.processInterviewState(incomingText, sessionMatchRow, groqInstance);
+    }
+    return null;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports.checkInterviewGateway = checkInterviewGateway;
+}
