@@ -171,7 +171,7 @@ if (typeof module !== 'undefined') {
 }
 
 // Multi-Gateway Payment Escrow Hook 
-const adaptivePayments = require('./adaptivePayments');
+
 
 function processGlobalOrLocalEscrow(incomingMessage, senderPhone, activeMatchRow) {
     if (activeMatchRow.status === 'mutual_interest') {
@@ -186,7 +186,7 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 // Autonomous Project QA Router Hook 
-const qaInspector = require('./qaInspector');
+
 
 async function interceptFreelancerDelivery(incomingMessage, activeJobScope, groqInstance) {
     if (incomingMessage.toLowerCase().includes('completed') || incomingMessage.includes('submit')) {
