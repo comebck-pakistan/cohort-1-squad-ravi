@@ -30,6 +30,4 @@ async function runAutomatedScopeReview(submissionText, originalJobRequirements, 
     return reviewResult;
 }
 
-if (typeof module !== 'undefined') {
-    module.exports.runAutomatedScopeReview = runAutomatedScopeReview;
-}
+export { runAutomatedScopeReview };
