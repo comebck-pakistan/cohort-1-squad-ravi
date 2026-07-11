@@ -43,6 +43,5 @@ async function processInterviewState(userReply, activeMatchState, groqClient = n
     return null;
 }
 
-if (typeof module !== 'undefined') {
-    module.exports.processInterviewState = processInterviewState;
-}
+export { processInterviewState };
+
