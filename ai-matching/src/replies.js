@@ -443,3 +443,20 @@ module.exports = {
     ...module.exports,
     shieldQAReplies
 };
+
+// Localized Scope Negotiation Text Templates
+const scopeNegotiatorReplies = {
+    english: {
+        freelancerPrompt: "📢 Pukaar Interview Assistant: Before freezing the contract with the client, please confirm your parameters:\n\n❓ How many hours per week can you dedicate to this project, and what is your earliest start date?",
+        clientSummary: (summary) => `🎯 Freelancer Interview Summary:\n"${summary}"\n\nTo lock these finalized terms and proceed to the secure payment milestone gateway, reply '1' or 'approve scope'.`
+    },
+    roman_urdu: {
+        freelancerPrompt: "📢 Pukaar Interview Assistant: Client ke sath contract freeze karne se pehle, please aek choti si baat confirm karein:\n\n❓ Aap is project ke liye per week kitne ghante (hours) de saken gay aur kab se start kar sakte hain?",
+        clientSummary: (summary) => `🎯 Freelancer Interview Summary:\n"${summary}"\n\nTerms freeze karne aur secure payment gateway par janay ke liye **'1'** ya **'approve scope'** reply karein.`
+    }
+};
+
+module.exports = {
+    ...module.exports,
+    scopeNegotiatorReplies
+};
