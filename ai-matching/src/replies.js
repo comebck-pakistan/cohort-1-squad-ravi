@@ -368,67 +368,25 @@ export function pickEditSuccessReply(field, value) {
 }
 
 
-// Localized Multilingual Translation Matrix 
-const localizedOnboardingReplies = {
-    english: {
-        welcome: "Welcome! Let's get your profile set up. First, what is your full name?",
-        askSkills: "Great! Please list your primary professional skills (comma-separated):",
-        trustScoreNudge: (score) => `Your current profile Trust Score is ${score}%. To unlock premium, high-paying clients, you can update your LinkedIn or GitHub links anytime!`,
-        contactApproved: "Contact access approved! The other party has been notified."
-    },
-    roman_urdu: {
-        welcome: "Khushamdeed! Aiye aapka profile banate hain. Sab se pehle, aapka poora naam kya hai?",
-        askSkills: "Zabardast! Apni khusoosi maharat (skills) likhein (comma se alag karein):",
-        trustScoreNudge: (score) => `Aapka current Trust Score ${score}% hai. Premium clients ke sath match hone ke liye aap kisi bhi waqt apna LinkedIn ya GitHub link bhi update kar sakte hain!`,
-        contactApproved: "Rabta karne ki ijazat mil gayi hai! Dusri party ko inform kar diya gaya hai."
-    }
-};
-
-module.exports = {
-    ...module.exports,
-    localizedOnboardingReplies
-};
-
-
-// Premium Multilingual Conversational Matrix 
-const fullyLocalizedAppReplies = {
+// Premium Multilingual Conversational Matrix
+export const fullyLocalizedAppReplies = {
     english: {
         welcome: "Welcome to Pukaar! Let's build your profile. First, what is your full name?",
         askSkills: "Great! Please list your primary professional skills (comma-separated):",
         onboardingComplete: "Registration complete! 🚀 Our matching engine is actively scanning positions.",
-        matchAlert: (title, score) => `🔥 New Match Found: ${title}\nCompatibility Score: ${score}%\n\nReply '1' or 'interested' to proceed.\nReply '2' or 'decline' to pass.`,
-        contactRequestPrompt: "The client has requested your WhatsApp contact details. Reply 'yes' to share or 'no' to keep it private."
+        trustScoreNudge: (score) => `Your current Trust Score is ${score}%. Premium clients prioritize verified profiles!`,
+        contactApproved: "Contact access approved! Both parties have been informed to initiate conversation details."
     },
     roman_urdu: {
-        welcome: "Pukaar App par khushamdeed! Aiye aapka profile banate hain. Sab se pehle, aapka poora naam kya hai?",
-        askSkills: "Zabardast! Apni khusoosi maharat (skills) likhein (jaise: React, UI/UX, Graphic Design):",
-        onboardingComplete: "Aapki registration mukammal ho chuki hai! 🚀 Hamara system aapke liye best matches dhoond raha hai.",
-        matchAlert: (title, score) => `🔥 Naya Match Mila Hai: ${title}\nCompatibility Score: ${score}%\n\nAage barhne ke liye '1' ya 'interested' ka jawab dein.\nReject karne ke liye '2' ya 'decline' ka jawab dein.`,
-        contactRequestPrompt: "Client aapka WhatsApp contact number mang raha hai. Ijazat dene ke liye 'yes' likhein ya ijazat na dene ke liye 'no' likhein."
+        welcome: "Khushamdeed! Aiye aapka profile banate hain. Sab se pehle, aapka poora naam kya hai?",
+        askSkills: "Zabardast! Apni khusoosi maharat (skills) likhein (comma se alag karein):",
+        trustScoreNudge: (score) => `Aapka current Trust Score ${score}% hai. Premium clients ke sath match hone ke liye aap kisi bhi waqt documents verify karwa sakte hain.`,
+        contactApproved: "Rabta karne ki ijazat mil gayi hai! Dusri party ko inform kar diya gaya hai."
     }
 };
 
-module.exports = {
-    ...module.exports,
-    fullyLocalizedAppReplies
-};
-
-// Conversational Contract Presenter Bridge 
-function generateContractInvoicePrompt(langState, clientName, budgetValue) {
-    const templates = {
-        english: `🤝 Mutual Interest Confirmed with Client: ${clientName}!\n\nTo lock this project securely in escrow, please review your financial threshold:\n💰 Milestone Budget: $${budgetValue}\n\nTo authorize funding now, please reply with exactly: **'1'** or **'pay milestone'**.`,
-        roman_urdu: `🤝 Client ${clientName} ke sath aapka mutual interest confirm ho gaya hai!\n\nProject ko escrow me महफूज़ (secure) karne ke liye details review karein:\n💰 Milestone Budget: $${budgetValue}\n\nPayment authorization ke liye abhi reply karein: **'1'** ya **'pay milestone'**.`
-    };
-    
-    return templates[langState] || templates['english'];
-}
-
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports.generateContractInvoicePrompt = generateContractInvoicePrompt;
-}
-
 // Localized Autonomous QA System Notification Matrix
-const shieldQAReplies = {
+export const shieldQAReplies = {
     english: {
         qaFailed: (feedback) => `⚠️ QA Guard Review Note: Your submission was reviewed and requires adjustments.\n\n❌ Missing Items: ${feedback}\n\nPlease update your files and submit again to trigger client escrow release.`,
         qaPassed: (feedback) => `✅ QA Shield Verified! The freelancer has completed all scope requirements perfectly.\n\n📝 Evaluation: ${feedback}\n\nTo release the escrow milestone payment immediately, reply '1' or 'release payment'.`
@@ -439,13 +397,8 @@ const shieldQAReplies = {
     }
 };
 
-module.exports = {
-    ...module.exports,
-    shieldQAReplies
-};
-
 // Localized Scope Negotiation Text Templates
-const scopeNegotiatorReplies = {
+export const scopeNegotiatorReplies = {
     english: {
         freelancerPrompt: "📢 Pukaar Interview Assistant: Before freezing the contract with the client, please confirm your parameters:\n\n❓ How many hours per week can you dedicate to this project, and what is your earliest start date?",
         clientSummary: (summary) => `🎯 Freelancer Interview Summary:\n"${summary}"\n\nTo lock these finalized terms and proceed to the secure payment milestone gateway, reply '1' or 'approve scope'.`
@@ -454,9 +407,4 @@ const scopeNegotiatorReplies = {
         freelancerPrompt: "📢 Pukaar Interview Assistant: Client ke sath contract freeze karne se pehle, please aek choti si baat confirm karein:\n\n❓ Aap is project ke liye per week kitne ghante (hours) de saken gay aur kab se start kar sakte hain?",
         clientSummary: (summary) => `🎯 Freelancer Interview Summary:\n"${summary}"\n\nTerms freeze karne aur secure payment gateway par janay ke liye **'1'** ya **'approve scope'** reply karein.`
     }
-};
-
-module.exports = {
-    ...module.exports,
-    scopeNegotiatorReplies
 };
