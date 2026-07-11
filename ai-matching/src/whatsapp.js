@@ -106,9 +106,6 @@ function coreCommandNormalizer(incomingText, sessionState = {}) {
     return incomingText;
 }
 
-if (typeof module !== 'undefined') {
-    module.exports.coreCommandNormalizer = coreCommandNormalizer;
-}
 
 
 // Autonomous Multi-Language Controller & AI Fallback Engine 
@@ -214,16 +211,26 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports.interceptFreelancerDelivery = interceptFreelancerDelivery;
 }
 
-// Autonomous Scope Interview Trigger Hook (Noor's Contribution)
-const scopeNegotiator = require('./scopeNegotiator');
 
-async function checkInterviewGateway(incomingText, sessionMatchRow, groqInstance) {
+// Custom Submodules
+import * as scopeNegotiator from './scopeNegotiator.js';
+import * as adaptivePayments from './adaptivePayments.js';
+import * as qaInspector from './qaInspector.js';
+
+// 1. Autonomous Scope Interview Trigger Hook
+export async function checkInterviewGateway(incomingText, sessionMatchRow, groqInstance) {
     if (sessionMatchRow.status === 'matched' && !sessionMatchRow.interview_step) {
         return await scopeNegotiator.processInterviewState(incomingText, sessionMatchRow, groqInstance);
     }
     return null;
 }
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports.checkInterviewGateway = checkInterviewGateway;
+// 2. Adaptive Multi-Gateway Fintech Router Hook
+export function handleFintechRouting(userPhoneNumber, milestoneAmount) {
+    return adaptivePayments.routeAdaptiveMilestone(userPhoneNumber, milestoneAmount);
+}
+
+// 3. Automated Quality Assurance Guard Hook
+export async function handleAutomatedQACheck(submissionText, jobRequirements, groqInstance) {
+    return await qaInspector.runAutomatedScopeReview(submissionText, jobRequirements, groqInstance);
 }
