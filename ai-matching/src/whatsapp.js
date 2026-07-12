@@ -1,8 +1,13 @@
 import { config } from './config.js';
+import { wasLastMessageUrdu, translateToRomanUrdu } from './language.js';
 
 // Equivalent of "WhatsApp Normal/Reset/Already Registered/Completion Reply" nodes - all of them
 // were sending the same shape of request, just with different text, so one function covers them all.
 export async function sendWhatsAppMessage(toPhone, bodyText) {
+  let finalText = bodyText;
+  if (wasLastMessageUrdu(toPhone)) {
+    finalText = await translateToRomanUrdu(bodyText);
+  }
   const url = `https://graph.facebook.com/v25.0/${config.whatsapp.phoneNumberId}/messages`;
 
   const response = await fetch(url, {
@@ -16,7 +21,7 @@ export async function sendWhatsAppMessage(toPhone, bodyText) {
       recipient_type: 'individual',
       to: toPhone,
       type: 'text',
-      text: { preview_url: false, body: bodyText },
+      text: { preview_url: false, body: finalText },
     }),
   });
 
