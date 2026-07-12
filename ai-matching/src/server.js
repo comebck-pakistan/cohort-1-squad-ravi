@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
 import { startRegistrationReminderLoop } from './reminders.js';
+import { setUrduFlag, detectRomanUrdu } from './language.js';
 
 const app = express();
 app.use(express.json());
@@ -72,6 +73,8 @@ app.post('/webhook', async (req, res) => {
     }
 
     const messageText = message.text?.body || '';
+    const isUrdu = await detectRomanUrdu(messageText);
+    setUrduFlag(phone, isUrdu);
 
     await handleIncomingMessage({ phone, messageText });
   } catch (err) {
