@@ -165,6 +165,15 @@ export async function handleIncomingMessage({ phone, messageText }) {
     });
     return;
   }
+  const lifecycleRole = freelancer ? 'freelancer' : conversation?.role;
+  if (lifecycleRole) {
+    const handledByFeatureHooks = await handleLifecycleFeatureHooks({
+      phone,
+      role: lifecycleRole,
+      messageText,
+    });
+    if (handledByFeatureHooks) return;
+  }
 
   // --- 1b. COMPLETED FREELANCER LINK RE-VET FAST-PATH ---
   // A completed freelancer can resend just one broken proof link. We classify
