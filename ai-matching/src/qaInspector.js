@@ -1,33 +1,35 @@
-// Advanced Autonomous Quality Assurance Engine (Pukaar QA Shield Layer)
-async function runAutomatedScopeReview(submissionText, originalJobRequirements, groqClient = null) {
-    if (!submissionText) return { status: 'empty', message: 'No submission data found.' };
+import { config } from './config.js';
 
-    let reviewResult = { status: 'passed_qa', feedback: 'Submission formatted cleanly.' };
+export async function runAutomatedScopeReview(submissionText, originalJobRequirements) {
+  if (!submissionText) return { status: 'empty', feedback: 'No submission data found.' };
 
-    if (groqClient) {
-        try {
-            const qaAnalysis = await groqClient.chat.completions.create({
-                messages: [{
-                    role: "system",
-                    content: "You are an expert project manager API. Compare the freelancer's submission text/link against the original project scope. Respond strictly in this JSON format: { \"passed\": true/false, \"feedback\": \"short explanation of what is missing or correct\" }"
-                }, {
-                    role: "user",
-                    content: `Job Requirements: ${originalJobRequirements}\nFreelancer Submission: ${submissionText}`
-                }],
-                model: "llama3-8b-8192", // Using team's token-saving model setting
-                temperature: 0.2,
-                response_format: { type: "json_object" }
-            });
+  const fallback = { status: 'passed_qa', feedback: 'Submission formatted cleanly.' };
 
-            let parsedResult = JSON.parse(qaAnalysis.choices.message.content);
-            reviewResult.status = parsedResult.passed ? 'passed_qa' : 'failed_qa';
-            reviewResult.feedback = parsedResult.feedback;
-        } catch (error) {
-            console.error("QA Guard Engine encountered a validation error, executing fallback:", error);
-        }
-    }
-
-    return reviewResult;
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.groq.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.groq.model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert project manager API. Compare the freelancer\'s submission text/link against the original project scope. Respond strictly in this JSON format: { "passed": true/false, "feedback": "short explanation of what is missing or correct" }',
+          },
+          { role: 'user', content: `Job Requirements: ${originalJobRequirements}\nFreelancer Submission: ${submissionText}` },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+    });
+    if (!response.ok) return fallback;
+    const data = await response.json();
+    const parsed = JSON.parse(data.choices[0].message.content);
+    return { status: parsed.passed ? 'passed_qa' : 'failed_qa', feedback: parsed.feedback };
+  } catch (err) {
+    console.error('[qaInspector] Groq review error:', err);
+    return fallback;
+  }
 }
-
-export { runAutomatedScopeReview };
