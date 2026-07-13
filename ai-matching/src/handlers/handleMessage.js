@@ -9,6 +9,7 @@ import {
   updateJobRequestField,
   deleteMatchesForPhone,
 } from '../supabase.js';
+import { handleLifecycleFeatureHooks } from '../lifecycleFeatures.js';
 import { extractConversationData } from '../groq.js';
 import {
   pickReplyText,
@@ -165,14 +166,18 @@ export async function handleIncomingMessage({ phone, messageText }) {
     });
     return;
   }
-  const lifecycleRole = freelancer ? 'freelancer' : conversation?.role;
+ const lifecycleRole = freelancer ? 'freelancer' : conversation?.role;
   if (lifecycleRole) {
-    const handledByFeatureHooks = await handleLifecycleFeatureHooks({
-      phone,
-      role: lifecycleRole,
-      messageText,
-    });
-    if (handledByFeatureHooks) return;
+    try {
+      const handledByFeatureHooks = await handleLifecycleFeatureHooks({
+        phone,
+        role: lifecycleRole,
+        messageText,
+      });
+      if (handledByFeatureHooks) return;
+    } catch (err) {
+      console.error('[lifecycleFeatures] hook failed, continuing normal flow:', err);
+    }
   }
 
   // --- 1b. COMPLETED FREELANCER LINK RE-VET FAST-PATH ---
