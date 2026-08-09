@@ -1,4 +1,4 @@
-﻿/**
+/**
  * localHandler.js
  *
  * Handles the majority of onboarding steps WITHOUT calling Groq.
@@ -36,22 +36,36 @@ function extractURL(msg) {
 }
 
 function extractRate(msg) {
+  const rangeMatch = msg.match(/\$?\s*(\d+(?:\.\d+)?k?)\s*(?:to|-|–|—)\s*\$?\s*(\d+(?:\.\d+)?k?)\s*(?:\/hr?|per\s*h(?:ou)?r|hourly|ph)?/i);
+  if (rangeMatch) return `$${rangeMatch[1]} - $${rangeMatch[2]}/hr`;
+
   const m = msg.match(/\$?\s*(\d+(?:\.\d+)?k?)\s*(?:\/hr?|per\s*h(?:ou)?r|hourly|ph)?/i);
-  return m ? `$${m[1]}/hr` : msg.trim();
+  if (m) return `$${m[1]}/hr`;
+  return msg.trim();
 }
 
 function extractBudgetProject(msg) {
-  const budgetMatch = msg.match(/\$?\s*(\d[\d,.]*(?:k)?)/i);
-  const countMatch  = msg.match(/(\d+)\s*(?:project|job|task|gig|site|app|design)/i);
+  const countMatch = msg.match(/(\d+)\s*(?:project|job|task|gig|site|app|design)/i);
+
+  const rangeMatch = msg.match(/\$?\s*(\d[\d,.]*k?)\s*(?:to|-|–|—)\s*\$?\s*(\d[\d,.]*k?)/i);
+  let budget;
+  if (rangeMatch) {
+    const num1 = rangeMatch[1].startsWith('$') ? rangeMatch[1] : `$${rangeMatch[1]}`;
+    const num2 = rangeMatch[2].startsWith('$') ? rangeMatch[2] : `$${rangeMatch[2]}`;
+    budget = `${num1} - ${num2}`;
+  } else {
+    const budgetMatch = msg.match(/\$?\s*(\d[\d,.]*(?:k)?)/i);
+    budget = budgetMatch ? (budgetMatch[0].startsWith('$') ? budgetMatch[0] : `$${budgetMatch[0]}`) : msg.trim();
+  }
+
   return {
-    budget_project: budgetMatch ? budgetMatch[0].replace(/\s/g, '') : msg.trim(),
-    project_count:  countMatch  ? parseInt(countMatch[1], 10) : 1,
+    budget_project: budget,
+    project_count:  countMatch ? parseInt(countMatch[1], 10) : 1,
   };
 }
 
 function extractBudgetFulltime(msg) {
-  const m = msg.match(/\$?\s*(\d+(?:\.\d+)?k?)\s*(?:\/hr?|per\s*h(?:ou)?r|hourly|ph)?/i);
-  return m ? `$${m[1]}/hr` : msg.trim();
+  return extractRate(msg);
 }
 
 function detectRoleLocally(msg) {

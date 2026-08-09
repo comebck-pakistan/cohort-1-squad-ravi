@@ -128,6 +128,59 @@ function normalizeShorthand(lower) {
  * @param {'recurring'|'date'|'relative'} type - Which category matched
  * @returns {string}           - Always a non-empty string
  */
+function computeRelativeDeadlineDate(raw) {
+  const lower = raw.toLowerCase().trim();
+  const d = new Date();
+
+  if (/end\s+of\s+(this\s+)?week|this\s+week|by\s+(the\s+)?end\s+of\s+(this\s+)?week|eow/i.test(lower)) {
+    const day = d.getDay();
+    const diff = (7 - day) % 7;
+    d.setDate(d.getDate() + (diff === 0 ? 7 : diff));
+    const iso = d.toISOString().split('T')[0];
+    return `by end of week (${iso})`;
+  }
+
+  if (/next\s+week/i.test(lower)) {
+    const day = d.getDay();
+    const diff = (7 - day) % 7 + 7;
+    d.setDate(d.getDate() + diff);
+    const iso = d.toISOString().split('T')[0];
+    return `by next week (${iso})`;
+  }
+
+  if (/tomorrow|tmrw|tmr/i.test(lower)) {
+    d.setDate(d.getDate() + 1);
+    const iso = d.toISOString().split('T')[0];
+    return `tomorrow (${iso})`;
+  }
+
+  const daysMatch = lower.match(/(?:in\s+)?(\d+)\s+days?/i);
+  if (daysMatch) {
+    const num = parseInt(daysMatch[1], 10);
+    d.setDate(d.getDate() + num);
+    const iso = d.toISOString().split('T')[0];
+    return `in ${num} days (${iso})`;
+  }
+
+  const weeksMatch = lower.match(/(?:in\s+)?(\d+)\s+weeks?/i);
+  if (weeksMatch) {
+    const num = parseInt(weeksMatch[1], 10);
+    d.setDate(d.getDate() + num * 7);
+    const iso = d.toISOString().split('T')[0];
+    return `in ${num} weeks (${iso})`;
+  }
+
+  if (/end\s+of\s+(this\s+)?month|this\s+month|eom/i.test(lower)) {
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const lastDay = new Date(y, m + 1, 0);
+    const iso = lastDay.toISOString().split('T')[0];
+    return `by end of month (${iso})`;
+  }
+
+  return null;
+}
+
 function normaliseDeadline(raw, type) {
   const lower = raw.toLowerCase().trim();
 
@@ -139,8 +192,11 @@ function normaliseDeadline(raw, type) {
   const shorthand = normalizeShorthand(lower);
   if (shorthand) return shorthand;
 
-  // For relative / date / bare-unit, the raw text is already human-readable;
-  // just make sure it's trimmed and sentence-cased for display.
+  if (type === 'relative') {
+    const relativeEst = computeRelativeDeadlineDate(raw);
+    if (relativeEst) return relativeEst;
+  }
+
   return raw.trim();
 }
 

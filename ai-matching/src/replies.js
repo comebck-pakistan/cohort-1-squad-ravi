@@ -20,10 +20,10 @@ const questions = {
     "Got it, Client! What kind of work are you looking to hire for?",
   ],
   collect_hire_type: [
-    "Are you looking to hire full-time, or is this project-based? 💼",
-    "Quick one — full-time hire, or a one-off project?",
+    "Is your work full-time, or is that project-based work? 💼",
     "Is this a full-time role you're hiring for, or project-based work?",
-    "Full-time or project-based — which one fits what you need?",
+    "Quick question — is this a full-time position, or project-based work?",
+    "Will your work be full-time, or is it a project-based gig?",
   ],
   collect_budget_fulltime: [
     "What's your budget for the hourly rate, in USD? 💵 (e.g. $30/hr, $50/hr)",
