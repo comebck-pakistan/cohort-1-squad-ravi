@@ -26,16 +26,16 @@ const questions = {
     "Full-time or project-based — which one fits what you need?",
   ],
   collect_budget_fulltime: [
-    "What's your budget for the hourly rate? 💵",
-    "Got it — what hourly rate are you budgeting for?",
-    "What's the hourly rate range you're working with?",
-    "What's your budget looking like, per hour?",
+    "What's your budget for the hourly rate, in USD? 💵 (e.g. $30/hr, $50/hr)",
+    "Got it — what hourly rate are you budgeting for, in USD? (e.g. $40/hr)",
+    "What's the hourly rate range you're working with, in USD? (e.g. $25/hr)",
+    "What's your budget looking like, per hour in USD? (e.g. $50/hr)",
   ],
   collect_budget_project: [
-    "What's your budget for this project, and how many projects are we talking? 💰",
-    "Got it — what's your project budget, and roughly how many projects total?",
-    "What budget do you have per project, and how many are you looking to get done?",
-    "What's the project budget, and how many projects should I expect?",
+    "What's your budget for this project in USD, and how many projects are we talking? 💰 (e.g. $200, $1000)",
+    "Got it — what's your project budget in USD, and roughly how many projects total? (e.g. $500)",
+    "What budget do you have per project in USD, and how many are you looking to get done? (e.g. $300)",
+    "What's the project budget in USD, and how many projects should I expect? (e.g. $200)",
   ],
   collect_deadline: [
     "Almost there! What's your deadline or timeline? ⏰ (e.g. \"2 weeks\", \"July 15\", \"weekly\")",
@@ -236,7 +236,7 @@ Object.assign(questions, {
     "Lastly, give me a brief description of yourself, what you do, and who you want to match up with, in your own words.",
   ],
   collect_client_brief_desc: [
-    "Lastly, give me a brief description of your project, in your own words.",
+    "Lastly, tell us anything else that could help us find the perfect match for you. (Optional)\n\n(Examples: preferred tools, editing style, niche, experience level, availability, project goals, special requirements, or anything else we should know.)\n\nReply 'skip' if you don't have anything to add.",
   ],
   completed: [
     'All done! 🎉 Your profile is officially saved.',
@@ -304,8 +304,8 @@ export function getResetReply() {
 export function isSkipMessage(text) {
   if (!text) return false;
   const t = text.trim().toLowerCase();
-  if (t === 'skip') return true;
-  return ['skip this', 'no thanks', 'n/a', 'none', 'pass'].some((phrase) => t.includes(phrase));
+  if (['skip', 'no', 'nope', 'nothing'].includes(t)) return true;
+  return ['skip this', 'no thanks', 'n/a', 'none', 'pass', 'nothing else'].some((phrase) => t.includes(phrase));
 }
 
 function formatCurrentData(data) {

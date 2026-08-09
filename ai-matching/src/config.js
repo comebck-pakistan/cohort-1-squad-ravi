@@ -26,4 +26,11 @@ export const config = {
     apiKey: required('GROQ_API_KEY'),
     model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   },
+
+  matching: {
+    ruleWeight: 0.4,
+    aiWeight:   0.6,
+    threshold:  50,
+    maxMatches: 3,
+  },
 };
