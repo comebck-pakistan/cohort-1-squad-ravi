@@ -332,3 +332,92 @@ export function pickEditSuccessReply(field, value) {
     .replace(/\{VALUE\}/g, value || 'Not provided');
 }
 
+/**
+ * Returns interactive button configuration for a given onboarding step if applicable,
+ * or text-only configuration if the step requires free-form typing.
+ *
+ * @param {string} step       Current or next conversation step
+ * @param {object} [tempData] Conversation temp_data (for niche-aware preference text)
+ * @returns {{ text: string, buttons: Array<{id: string, title: string}> | null, footer?: string }}
+ */
+export function getStepInteractiveConfig(step, tempData = null) {
+  const normalizedStep = (step || 'welcome').toLowerCase().trim();
+
+  switch (normalizedStep) {
+    case 'welcome':
+    case 'collect_role':
+      return {
+        text: pickReplyText('collect_role').text,
+        buttons: [
+          { id: 'role_freelancer', title: '🛠️ Freelancer' },
+          { id: 'role_client',     title: '💼 Client' },
+        ],
+        footer: 'Tap an option or type your answer',
+      };
+
+    case 'collect_hire_type':
+      return {
+        text: pickReplyText('collect_hire_type').text,
+        buttons: [
+          { id: 'hire_project',  title: '📦 Project-based' },
+          { id: 'hire_fulltime', title: '⏱️ Full-time' },
+        ],
+        footer: 'Tap an option or type your answer',
+      };
+
+    case 'collect_availability':
+      return {
+        text: pickReplyText('collect_availability').text,
+        buttons: [
+          { id: 'avail_40h',      title: '⚡ 40h/wk Full-time' },
+          { id: 'avail_20h',      title: '⏳ 20h/wk Part-time' },
+          { id: 'avail_flexible', title: '🌱 Flexible (10h/wk)' },
+        ],
+        footer: 'Tap or type exact hours',
+      };
+
+    case 'collect_deadline':
+      return {
+        text: pickReplyText('collect_deadline').text,
+        buttons: [
+          { id: 'deadline_asap',      title: '⚡ ASAP / Urgent' },
+          { id: 'deadline_2w',        title: '📅 In 1-2 Weeks' },
+          { id: 'deadline_recurring', title: '🔄 Recurring' },
+        ],
+        footer: 'Tap or type any date/timeline',
+      };
+
+    case 'collect_profile_link':
+      return {
+        text: pickReplyText('collect_profile_link').text,
+        buttons: [
+          { id: 'skip_profile_link', title: 'Skip for now' },
+        ],
+        footer: 'Paste link or tap Skip',
+      };
+
+    case 'collect_client_brief_desc':
+      return {
+        text: pickReplyText('collect_client_brief_desc').text,
+        buttons: [
+          { id: 'skip_brief_desc', title: '⏭️ Skip / None' },
+        ],
+        footer: 'Type notes or tap Skip',
+      };
+
+    case 'collect_preferences':
+      return {
+        text: pickPreferencesReply(tempData),
+        buttons: [
+          { id: 'pref_open', title: '🌍 Open to anything' },
+        ],
+        footer: 'Tap or type specific preferences',
+      };
+
+    default: {
+      const { text } = pickReplyText(normalizedStep);
+      return { text, buttons: null };
+    }
+  }
+}
+

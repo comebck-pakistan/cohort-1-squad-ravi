@@ -1,6 +1,7 @@
 import express from 'express';
 import { config } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
+import { handleIcebreakerReply } from './handlers/icebreakerHandler.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
 
 const app = express();
@@ -61,6 +62,31 @@ app.post('/webhook', async (req, res) => {
     }
 
     const phone = message.from;
+
+    // --- INTERACTIVE MESSAGES (list_reply / button_reply) ---
+    if (message.type === 'interactive') {
+      const listReply = message.interactive?.list_reply;
+      const buttonReply = message.interactive?.button_reply;
+
+      if (listReply?.id) {
+        const icebreakerIds = ['start_onboarding', 'show_matches', 'update_info', 'learn_more'];
+        if (icebreakerIds.includes(listReply.id)) {
+          await handleIcebreakerReply(phone, listReply.id, listReply.title || '');
+          return;
+        }
+        await handleIncomingMessage({ phone, messageText: listReply.id, buttonPayload: listReply });
+        return;
+      }
+
+      if (buttonReply?.id) {
+        console.log(`[server] Button reply: phone=${phone}, id=${buttonReply.id}, title="${buttonReply.title}"`);
+        await handleIncomingMessage({ phone, messageText: buttonReply.id, buttonPayload: buttonReply });
+        return;
+      }
+
+      console.log(`[server] Unsupported interactive sub-type for phone=${phone}, ignoring.`);
+      return;
+    }
 
     if (message.type !== 'text') {
       await sendWhatsAppMessage(

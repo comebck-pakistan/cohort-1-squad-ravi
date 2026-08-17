@@ -70,8 +70,8 @@ function extractBudgetFulltime(msg) {
 
 function detectRoleLocally(msg) {
   const lower = msg.toLowerCase().trim();
-  if (/^f$/.test(lower)) return 'freelancer';
-  if (/^c$/.test(lower)) return 'client';
+  if (lower === 'role_freelancer' || /^f$/.test(lower)) return 'freelancer';
+  if (lower === 'role_client' || /^c$/.test(lower)) return 'client';
   if (
     /\b(freelancer|freelance)\b/i.test(lower) ||
     /\blooking for (work|gigs?|projects?|clients?)\b/i.test(lower) ||
@@ -88,8 +88,9 @@ function detectRoleLocally(msg) {
 }
 
 function detectHireTypeLocally(msg) {
-  if (/full[- ]?time|permanent|ongoing|long[- ]?term|salary|staff/i.test(msg)) return 'full-time';
-  if (/project[- ]?based|project|gig|one[- ]?time|one[- ]?off|contract/i.test(msg)) return 'project-based';
+  const lower = msg.toLowerCase().trim();
+  if (lower === 'hire_fulltime' || /full[- ]?time|permanent|ongoing|long[- ]?term|salary|staff/i.test(lower)) return 'full-time';
+  if (lower === 'hire_project' || /project[- ]?based|project|gig|one[- ]?time|one[- ]?off|contract/i.test(lower)) return 'project-based';
   return null;
 }
 
@@ -177,6 +178,9 @@ export function tryHandleLocally(step, role, messageText, tempData) {
 
     // Freelancer flow
     case 'collect_profile_link': {
+      if (msg === 'skip_profile_link') {
+        return passthrough(role, 'collect_portfolio', { profile_link: null });
+      }
       const url = extractURL(msg);
       return passthrough(role, 'collect_portfolio', { profile_link: url || msg });
     }
@@ -192,11 +196,20 @@ export function tryHandleLocally(step, role, messageText, tempData) {
     case 'collect_rate':
       return passthrough(role, 'collect_availability', { rate: extractRate(msg) });
 
-    case 'collect_availability':
-      return passthrough(role, 'collect_preferences', { availability: msg });
+    case 'collect_availability': {
+      let avail = msg;
+      if (msg === 'avail_40h') avail = '40 hours/week (Full-time)';
+      else if (msg === 'avail_20h') avail = '20 hours/week (Part-time)';
+      else if (msg === 'avail_flexible') avail = '10-15 hours/week (Flexible)';
+      return passthrough(role, 'collect_preferences', { availability: avail });
+    }
 
-    case 'collect_preferences':
-      return passthrough(role, 'collect_freelancer_brief_desc', { preferences: msg });
+    case 'collect_preferences': {
+      let pref = msg;
+      if (msg === 'pref_open') pref = 'Open to anything';
+      else if (msg === 'pref_useu') pref = 'US/EU clients';
+      return passthrough(role, 'collect_freelancer_brief_desc', { preferences: pref });
+    }
 
     case 'collect_freelancer_brief_desc':
       return passthrough(role, 'completed', { brief_description: msg });
@@ -226,6 +239,9 @@ export function tryHandleLocally(step, role, messageText, tempData) {
     }
 
     case 'collect_client_brief_desc':
+      if (msg === 'skip_brief_desc') {
+        return passthrough(role, 'completed', { brief_description: null });
+      }
       return passthrough(role, 'completed', { brief_description: msg });
 
     default:

@@ -216,6 +216,32 @@ export function parseDeadlineLocally(messageText) {
   const raw = messageText.trim();
   const lower = raw.toLowerCase();
 
+  // Button ID shortcuts
+  if (lower === 'deadline_asap') {
+    return {
+      deadline_raw: 'ASAP',
+      deadline_normalized: 'as soon as possible',
+      is_recurring: false,
+      confidence: 'high',
+    };
+  }
+  if (lower === 'deadline_2w') {
+    return {
+      deadline_raw: '2 weeks',
+      deadline_normalized: normaliseDeadline('in 2 weeks', 'relative'),
+      is_recurring: false,
+      confidence: 'high',
+    };
+  }
+  if (lower === 'deadline_recurring') {
+    return {
+      deadline_raw: 'recurring',
+      deadline_normalized: 'every week',
+      is_recurring: true,
+      confidence: 'high',
+    };
+  }
+
   // 1. Recurring cadences (highest priority)
   for (const p of RECURRING_PATTERNS) {
     if (p.test(lower)) {

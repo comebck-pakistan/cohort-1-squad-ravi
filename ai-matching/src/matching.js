@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import { getActiveFreelancers, getActiveJobRequests, getDeclinedPairs, getAllLiveMatchesForPhone, insertMatch } from './supabase.js';
-import { sendWhatsAppMessage } from './whatsapp.js';
+import { sendWhatsAppMessage, sendWhatsAppButtons } from './whatsapp.js';
 
 // ── Tokenisation helper ──────────────────────────────────────────────────────
 function tokenize(text) {
@@ -327,8 +327,18 @@ export async function persistAndNotifyMatches({ matches, initiatorRole, initiato
     if (isFirst) {
       const notifyPhone = initiatorRole === 'client' ? freelancerPhone : jobPhone;
       const notifyText  = buildNotificationText(initiatorRole, jobData, m, freelancerData);
-      await sendWhatsAppMessage(notifyPhone, notifyText);
-      console.log(`[matching] Notified rank-1 match: ${notifyPhone} (batch ${batchId})`);
+      const buttons = [
+        { id: 'match_interested', title: '✅ Interested' },
+        { id: 'match_declined',   title: '❌ Not Interested' },
+      ];
+      await sendWhatsAppButtons(
+        notifyPhone,
+        notifyText,
+        buttons,
+        initiatorRole === 'client' ? '🚀 New Project Match' : '🎯 New Freelancer Match',
+        'Tap an option to respond'
+      );
+      console.log(`[matching] Notified rank-1 match with buttons: ${notifyPhone} (batch ${batchId})`);
     }
   }
 

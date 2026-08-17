@@ -25,13 +25,45 @@ import {
   pickEditConfirmReply,
   pickEditSuccessReply,
   pickPreferencesReply,
+  getStepInteractiveConfig,
 } from '../replies.js';
-import { sendWhatsAppMessage } from '../whatsapp.js';
+import { sendWhatsAppMessage, sendWhatsAppButtons, sendWelcomeInteractive } from '../whatsapp.js';
 import { isAckOnly, parseDeadlineLocally, ensureDeadlineNormalized } from '../deadline.js';
 import { tryHandleLocally } from '../localHandler.js';
 
+import { handleIcebreakerReply } from './icebreakerHandler.js';
+
+/**
+ * Sends either an interactive button message or regular text message
+ * depending on whether the step has interactive buttons configured.
+ */
+async function sendStepMessage(phone, step, tempData = null) {
+  const stepConfig = getStepInteractiveConfig(step, tempData);
+  if (stepConfig.buttons && stepConfig.buttons.length > 0) {
+    await sendWhatsAppButtons(phone, stepConfig.text, stepConfig.buttons, null, stepConfig.footer || null);
+  } else {
+    await sendWhatsAppMessage(phone, stepConfig.text);
+  }
+}
+
+// 14 days in milliseconds
+const INACTIVITY_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Returns true when the conversation was last updated more than 14 days ago.
+ * A null/missing updated_at (brand-new conversation) is treated as active.
+ */
+function isReturningAfterInactivity(conversationRow) {
+  if (!conversationRow?.updated_at) return false;
+  const lastSeen = new Date(conversationRow.updated_at).getTime();
+  return (Date.now() - lastSeen) > INACTIVITY_MS;
+}
+
 const RESET_PHRASES = ['reset ai', 'reset bot'];
 const SHOW_MATCHES_PHRASES = ['show my matches', 'my matches', 'show matches'];
+const GET_STARTED_PHRASES = ['get started', 'get_started', 'start_onboarding', 'start onboarding'];
+const LEARN_MORE_PHRASES  = ['learn what this bot does', 'learn_more', 'learn more', 'what does this bot do', 'what this bot does'];
+const UPDATE_INFO_PHRASES = ['update my info', 'update_info', 'update info'];
 
 export async function handleIncomingMessage({ phone, messageText }) {
   // Artificial delay to ensure "typing..." indicator is visible even on fast paths
@@ -44,6 +76,34 @@ export async function handleIncomingMessage({ phone, messageText }) {
     findFreelancer(phone),
     getActiveMatchesForPhone(phone),
   ]);
+
+  // --- 0. RETURNING-USER INACTIVITY GATE ---
+  // If the user hasn't messaged in 14+ days, send the interactive welcome menu
+  // (mirrors the Icebreaker experience for first-time users) and stop.
+  if (isReturningAfterInactivity(conversation)) {
+    const daysSince = Math.floor(
+      (Date.now() - new Date(conversation.updated_at).getTime()) / 86_400_000
+    );
+    console.log(`[welcome] returning user ${phone}, inactive for ${daysSince} days`);
+    await sendWelcomeInteractive(phone);
+    return;
+  }
+
+  // --- 0.4 META ICEBREAKER PLAIN-TEXT COMMANDS ---
+  // When users tap Meta Icebreaker prompts configured in WhatsApp Manager UI,
+  // Meta sends them as plain text messages (e.g. "Get started", "Learn what this bot does").
+  if (GET_STARTED_PHRASES.includes(lowerText)) {
+    await handleIcebreakerReply(phone, 'start_onboarding', messageText);
+    return;
+  }
+  if (LEARN_MORE_PHRASES.includes(lowerText)) {
+    await handleIcebreakerReply(phone, 'learn_more', messageText);
+    return;
+  }
+  if (UPDATE_INFO_PHRASES.includes(lowerText)) {
+    await handleIcebreakerReply(phone, 'update_info', messageText);
+    return;
+  }
 
   // --- 0.5 SHOW MY MATCHES ---
   if (SHOW_MATCHES_PHRASES.some((phrase) => lowerText.includes(phrase))) {
@@ -160,7 +220,10 @@ export async function handleIncomingMessage({ phone, messageText }) {
                         (pendingMatch.status === 'awaiting_other' && !isFirstParty);
 
     if (isTheirTurn) {
-      if (lowerText === 'not interested' || lowerText === 'no') {
+      const isDeclined = lowerText === 'not interested' || lowerText === 'no' || lowerText.startsWith('match_declined');
+      const isInterested = lowerText === 'interested' || lowerText === 'yes' || lowerText.startsWith('match_interested');
+
+      if (isDeclined) {
         await updateMatchStatus(pendingMatch.id, { 
           status: 'declined', 
           declined_by: role,
@@ -171,7 +234,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
         return;
       } 
       
-      if (lowerText === 'interested' || lowerText === 'yes') {
+      if (isInterested) {
         if (pendingMatch.status === 'awaiting_response') {
           // First party accepted!
           await updateMatchStatus(pendingMatch.id, { 
@@ -181,14 +244,24 @@ export async function handleIncomingMessage({ phone, messageText }) {
           
           await sendWhatsAppMessage(phone, "Awesome! We've notified the other party. We'll share contact info as soon as they confirm.");
           
-          // Notify the other party (Bug 3 fix)
+          // Notify the other party with interactive buttons
           const otherPhone = isClient ? pendingMatch.freelancer_phone : pendingMatch.job_phone;
           const notifyText = [
             `🎉 The ${role} has reviewed your profile and is interested in matching!`,
             ``,
             `Reply *interested* if you'd like to connect, or *not interested* to pass.`
           ].join('\n');
-          await sendWhatsAppMessage(otherPhone, notifyText);
+          const buttons = [
+            { id: 'match_interested', title: '✅ Interested' },
+            { id: 'match_declined',   title: '❌ Not Interested' },
+          ];
+          await sendWhatsAppButtons(
+            otherPhone,
+            notifyText,
+            buttons,
+            '🎉 Match Opportunity',
+            'Tap an option to respond'
+          );
           return;
           
         } else if (pendingMatch.status === 'awaiting_other') {
@@ -248,9 +321,12 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
           // ── Feature 8: Return-to-Matching Prompt ──────────────────────────
           // After contact is shared, ask both parties if they want to keep
-          // receiving matches. Track the pending question via temp_data
-          // (same pattern as editing_field).
-          const availPrompt = `Would you like to continue receiving matches? Reply *yes* to stay active, or *no* to pause.`;
+          // receiving matches with interactive buttons.
+          const availPrompt = `Would you like to continue receiving matches? Tap below to stay active or pause.`;
+          const availButtons = [
+            { id: 'avail_active_yes', title: '🟢 Keep Active' },
+            { id: 'avail_active_no',  title: '⏸️ Pause Matches' },
+          ];
 
           const [flConv, clConv] = await Promise.all([
             findConversation(pendingMatch.freelancer_phone),
@@ -278,8 +354,8 @@ export async function handleIncomingMessage({ phone, messageText }) {
           }
           await Promise.all(flagUpdates);
 
-          await sendWhatsAppMessage(pendingMatch.freelancer_phone, availPrompt);
-          await sendWhatsAppMessage(pendingMatch.job_phone, availPrompt);
+          await sendWhatsAppButtons(pendingMatch.freelancer_phone, availPrompt, availButtons, 'Availability Status', 'Tap an option');
+          await sendWhatsAppButtons(pendingMatch.job_phone, availPrompt, availButtons, 'Availability Status', 'Tap an option');
 
           return;
         }
@@ -287,8 +363,17 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
       // Catch-all: user has a pending match and it's their turn, but they
       // sent something other than "interested" / "not interested".
-      // Re-prompt instead of falling through to generic handlers.
-      await sendWhatsAppMessage(phone, `You have a match waiting for your response!\n\nReply *interested* to connect, or *not interested* to pass.`);
+      const buttons = [
+        { id: 'match_interested', title: '✅ Interested' },
+        { id: 'match_declined',   title: '❌ Not Interested' },
+      ];
+      await sendWhatsAppButtons(
+        phone,
+        `You have a match waiting for your response!\n\nReply *interested* to connect, or *not interested* to pass.`,
+        buttons,
+        '⏳ Match Waiting',
+        'Tap an option'
+      );
       return;
     }
   }
@@ -297,8 +382,8 @@ export async function handleIncomingMessage({ phone, messageText }) {
   // If the user has an outstanding "continue receiving matches?" question,
   // handle yes/no before any other handler can intercept the message.
   if (conversation?.temp_data?.awaiting_availability_response) {
-    const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yea', 'sure', 'y']);
-    const NO_WORDS  = new Set(['no', 'nope', 'nah', 'n']);
+    const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yea', 'sure', 'y', 'avail_active_yes']);
+    const NO_WORDS  = new Set(['no', 'nope', 'nah', 'n', 'avail_active_no']);
 
     // Clear the pending flag regardless of answer
     const cleanTempData = { ...conversation.temp_data };
@@ -323,8 +408,18 @@ export async function handleIncomingMessage({ phone, messageText }) {
       return;
     }
 
-    // Unrecognised reply — re-prompt
-    await sendWhatsAppMessage(phone, `Would you like to continue receiving matches? Reply *yes* to stay active, or *no* to pause.`);
+    // Unrecognised reply — re-prompt with buttons
+    const availButtons = [
+      { id: 'avail_active_yes', title: '🟢 Keep Active' },
+      { id: 'avail_active_no',  title: '⏸️ Pause Matches' },
+    ];
+    await sendWhatsAppButtons(
+      phone,
+      `Would you like to continue receiving matches? Reply *yes* to stay active, or *no* to pause.`,
+      availButtons,
+      'Availability Status',
+      'Tap an option'
+    );
     return;
   }
 
@@ -386,8 +481,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
     if (conversation.step === 'completed') {
       await sendWhatsAppMessage(phone, pickPostCompletionReply());
     } else {
-      const { text } = pickReplyText(conversation.step);
-      await sendWhatsAppMessage(phone, text);
+      await sendStepMessage(phone, conversation.step, conversation.temp_data);
     }
     return;
   }
@@ -419,8 +513,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
         step: aiResult.next_step,
         temp_data: aiResult.extracted_data,
       });
-      const { text } = pickReplyText(aiResult.next_step);
-      await sendWhatsAppMessage(phone, text);
+      await sendStepMessage(phone, aiResult.next_step, aiResult.extracted_data);
       return;
     }
     // confidence === 'low' → fall through to Groq below
@@ -715,9 +808,5 @@ export async function handleIncomingMessage({ phone, messageText }) {
     return;
   }
 
-  // Use the niche-aware picker for collect_preferences, generic picker for everything else
-  const replyText = aiResult.next_step === 'collect_preferences'
-    ? pickPreferencesReply(mergedTempData)
-    : pickReplyText(aiResult.next_step).text;
-  await sendWhatsAppMessage(phone, replyText);
+  await sendStepMessage(phone, aiResult.next_step, mergedTempData);
 }
