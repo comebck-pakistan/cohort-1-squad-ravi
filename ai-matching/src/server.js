@@ -1,8 +1,10 @@
 import express from 'express';
 import { config } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
+import { handleIcebreakerReply } from './handlers/icebreakerHandler.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
-import { startRegistrationReminderLoop } from './reminders.js';
+import { checkAndTriggerDueFeedback } from './feedback.js';
+import { checkAndTriggerWeeklyPulse } from './pulse.js';
 
 const app = express();
 app.use(express.json());
@@ -63,6 +65,31 @@ app.post('/webhook', async (req, res) => {
 
     const phone = message.from;
 
+    // --- INTERACTIVE MESSAGES (list_reply / button_reply) ---
+    if (message.type === 'interactive') {
+      const listReply = message.interactive?.list_reply;
+      const buttonReply = message.interactive?.button_reply;
+
+      if (listReply?.id) {
+        const icebreakerIds = ['start_onboarding', 'show_matches', 'update_info', 'learn_more'];
+        if (icebreakerIds.includes(listReply.id)) {
+          await handleIcebreakerReply(phone, listReply.id, listReply.title || '');
+          return;
+        }
+        await handleIncomingMessage({ phone, messageText: listReply.id, buttonPayload: listReply });
+        return;
+      }
+
+      if (buttonReply?.id) {
+        console.log(`[server] Button reply: phone=${phone}, id=${buttonReply.id}, title="${buttonReply.title}"`);
+        await handleIncomingMessage({ phone, messageText: buttonReply.id, buttonPayload: buttonReply });
+        return;
+      }
+
+      console.log(`[server] Unsupported interactive sub-type for phone=${phone}, ignoring.`);
+      return;
+    }
+
     if (message.type !== 'text') {
       await sendWhatsAppMessage(
         phone,
@@ -83,7 +110,36 @@ app.get('/', (req, res) => {
   res.send('The bot is running.');
 });
 
+// Endpoint to trigger post-project feedback check manually or via cron
+app.all('/api/check-feedback', async (req, res) => {
+  try {
+    const triggered = await checkAndTriggerDueFeedback();
+    res.json({ ok: true, feedback_prompts_triggered: triggered });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Endpoint to trigger weekly availability pulse check-in manually or via cron
+app.all('/api/check-pulse', async (req, res) => {
+  try {
+    const sent = await checkAndTriggerWeeklyPulse();
+    res.json({ ok: true, pulse_prompts_sent: sent });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   console.log(`🚀 The bot listening on port ${config.port}`);
-  startRegistrationReminderLoop();
+
+  // Run periodic background feedback scan every 6 hours (21,600,000 ms)
+  setInterval(() => {
+    checkAndTriggerDueFeedback().catch(err => console.error('[server] Background feedback scan error:', err));
+  }, 6 * 60 * 60 * 1000);
+
+  // Run periodic background availability pulse scan every 12 hours (43,200,000 ms)
+  setInterval(() => {
+    checkAndTriggerWeeklyPulse().catch(err => console.error('[server] Background pulse scan error:', err));
+  }, 12 * 60 * 60 * 1000);
 });

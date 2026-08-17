@@ -20,22 +20,22 @@ const questions = {
     "Got it, Client! What kind of work are you looking to hire for?",
   ],
   collect_hire_type: [
-    "Are you looking to hire full-time, or is this project-based? 💼",
-    "Quick one — full-time hire, or a one-off project?",
+    "Is your work full-time, or is that project-based work? 💼",
     "Is this a full-time role you're hiring for, or project-based work?",
-    "Full-time or project-based — which one fits what you need?",
+    "Quick question — is this a full-time position, or project-based work?",
+    "Will your work be full-time, or is it a project-based gig?",
   ],
   collect_budget_fulltime: [
-    "What's your budget for the hourly rate? 💵",
-    "Got it — what hourly rate are you budgeting for?",
-    "What's the hourly rate range you're working with?",
-    "What's your budget looking like, per hour?",
+    "What's your budget for the hourly rate, in USD? 💵 (e.g. $30/hr, $50/hr)",
+    "Got it — what hourly rate are you budgeting for, in USD? (e.g. $40/hr)",
+    "What's the hourly rate range you're working with, in USD? (e.g. $25/hr)",
+    "What's your budget looking like, per hour in USD? (e.g. $50/hr)",
   ],
   collect_budget_project: [
-    "What's your budget for this project, and how many projects are we talking? 💰",
-    "Got it — what's your project budget, and roughly how many projects total?",
-    "What budget do you have per project, and how many are you looking to get done?",
-    "What's the project budget, and how many projects should I expect?",
+    "What's your budget for this project in USD, and how many projects are we talking? 💰 (e.g. $200, $1000)",
+    "Got it — what's your project budget in USD, and roughly how many projects total? (e.g. $500)",
+    "What budget do you have per project in USD, and how many are you looking to get done? (e.g. $300)",
+    "What's the project budget in USD, and how many projects should I expect? (e.g. $200)",
   ],
   collect_deadline: [
     "Almost there! What's your deadline or timeline? ⏰ (e.g. \"2 weeks\", \"July 15\", \"weekly\")",
@@ -271,7 +271,7 @@ Object.assign(questions, {
     "Lastly, give me a brief description of yourself, what you do, and who you want to match up with, in your own words.",
   ],
   collect_client_brief_desc: [
-    "Lastly, give me a brief description of your project, in your own words.",
+    "Lastly, tell us anything else that could help us find the perfect match for you. (Optional)\n\n(Examples: preferred tools, editing style, niche, experience level, availability, project goals, special requirements, or anything else we should know.)\n\nReply 'skip' if you don't have anything to add.",
   ],
   completed: [
     'All done! 🎉 Your profile is officially saved.',
@@ -339,8 +339,8 @@ export function getResetReply() {
 export function isSkipMessage(text) {
   if (!text) return false;
   const t = text.trim().toLowerCase();
-  if (t === 'skip') return true;
-  return ['skip this', 'no thanks', 'n/a', 'none', 'pass'].some((phrase) => t.includes(phrase));
+  if (['skip', 'no', 'nope', 'nothing'].includes(t)) return true;
+  return ['skip this', 'no thanks', 'n/a', 'none', 'pass', 'nothing else'].some((phrase) => t.includes(phrase));
 }
 
 function formatCurrentData(data) {
@@ -365,5 +365,94 @@ export function pickEditSuccessReply(field, value) {
   return text
     .replace(/\{FIELD\}/g, field.replace(/_/g, ' '))
     .replace(/\{VALUE\}/g, value || 'Not provided');
+}
+
+/**
+ * Returns interactive button configuration for a given onboarding step if applicable,
+ * or text-only configuration if the step requires free-form typing.
+ *
+ * @param {string} step       Current or next conversation step
+ * @param {object} [tempData] Conversation temp_data (for niche-aware preference text)
+ * @returns {{ text: string, buttons: Array<{id: string, title: string}> | null, footer?: string }}
+ */
+export function getStepInteractiveConfig(step, tempData = null) {
+  const normalizedStep = (step || 'welcome').toLowerCase().trim();
+
+  switch (normalizedStep) {
+    case 'welcome':
+    case 'collect_role':
+      return {
+        text: pickReplyText('collect_role').text,
+        buttons: [
+          { id: 'role_freelancer', title: '🛠️ Freelancer' },
+          { id: 'role_client',     title: '💼 Client' },
+        ],
+        footer: 'Tap an option or type your answer',
+      };
+
+    case 'collect_hire_type':
+      return {
+        text: pickReplyText('collect_hire_type').text,
+        buttons: [
+          { id: 'hire_project',  title: '📦 Project-based' },
+          { id: 'hire_fulltime', title: '⏱️ Full-time' },
+        ],
+        footer: 'Tap an option or type your answer',
+      };
+
+    case 'collect_availability':
+      return {
+        text: pickReplyText('collect_availability').text,
+        buttons: [
+          { id: 'avail_40h',      title: '⚡ 40h/wk Full-time' },
+          { id: 'avail_20h',      title: '⏳ 20h/wk Part-time' },
+          { id: 'avail_flexible', title: '🌱 Flexible (10h/wk)' },
+        ],
+        footer: 'Tap or type exact hours',
+      };
+
+    case 'collect_deadline':
+      return {
+        text: pickReplyText('collect_deadline').text,
+        buttons: [
+          { id: 'deadline_asap',      title: '⚡ ASAP / Urgent' },
+          { id: 'deadline_2w',        title: '📅 In 1-2 Weeks' },
+          { id: 'deadline_recurring', title: '🔄 Recurring' },
+        ],
+        footer: 'Tap or type any date/timeline',
+      };
+
+    case 'collect_profile_link':
+      return {
+        text: pickReplyText('collect_profile_link').text,
+        buttons: [
+          { id: 'skip_profile_link', title: 'Skip for now' },
+        ],
+        footer: 'Paste link or tap Skip',
+      };
+
+    case 'collect_client_brief_desc':
+      return {
+        text: pickReplyText('collect_client_brief_desc').text,
+        buttons: [
+          { id: 'skip_brief_desc', title: '⏭️ Skip / None' },
+        ],
+        footer: 'Type notes or tap Skip',
+      };
+
+    case 'collect_preferences':
+      return {
+        text: pickPreferencesReply(tempData),
+        buttons: [
+          { id: 'pref_open', title: '🌍 Open to anything' },
+        ],
+        footer: 'Tap or type specific preferences',
+      };
+
+    default: {
+      const { text } = pickReplyText(normalizedStep);
+      return { text, buttons: null };
+    }
+  }
 }
 

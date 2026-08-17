@@ -6,10 +6,17 @@ import {
   saveJobRequest,
   resetUser,
   updateFreelancerField,
-  updateJobRequestField,
-  deleteMatchesForPhone,
+  insertMatch,
+  getActiveMatchesForPhone,
+  getAllLiveMatchesForPhone,
+  updateMatchStatus,
+  findJobRequest,
+  setAvailability,
+  saveReview,
+  getReputation,
 } from '../supabase.js';
 import { extractConversationData } from '../groq.js';
+import { findMatchesForClient, findMatchesForFreelancer, persistAndNotifyMatches } from '../matching.js';
 import {
   pickReplyText,
   pickPostCompletionReply,
@@ -20,112 +27,309 @@ import {
   pickEditConfirmReply,
   pickEditSuccessReply,
   pickPreferencesReply,
+  getStepInteractiveConfig,
 } from '../replies.js';
-import { sendWhatsAppMessage } from '../whatsapp.js';
-import { isAckOnly, parseDeadlineLocally, parseYesNoLocally, ensureDeadlineNormalized } from '../deadline.js';
-import { runMatchingForClient, runMatchingForFreelancer } from '../matching.js';
-import { classifyLinkField, extractFirstUrl, revetArtifact, runVettingForFreelancer } from '../vetting.js';
-import {
-  handlePendingContactApproval,
-  parseContactRequestCommand,
-  requestContactForMatchRank,
-} from '../contactRequests.js';
-import {
-  handleMatchLifecycleCommand,
-  handlePendingMatchFeedback,
-  parseMatchLifecycleCommand,
-} from '../matchLifecycle.js';
+import { sendWhatsAppMessage, sendWhatsAppButtons, sendWelcomeInteractive } from '../whatsapp.js';
+import { isAckOnly, parseDeadlineLocally, ensureDeadlineNormalized } from '../deadline.js';
+import { tryHandleLocally } from '../localHandler.js';
+import { parsePulseSelection, updateFreelancerPulseStatus } from '../pulse.js';
+
+import { handleIcebreakerReply } from './icebreakerHandler.js';
+
+/**
+ * Sends either an interactive button message or regular text message
+ * depending on whether the step has interactive buttons configured.
+ */
+async function sendStepMessage(phone, step, tempData = null) {
+  const stepConfig = getStepInteractiveConfig(step, tempData);
+  if (stepConfig.buttons && stepConfig.buttons.length > 0) {
+    await sendWhatsAppButtons(phone, stepConfig.text, stepConfig.buttons, null, stepConfig.footer || null);
+  } else {
+    await sendWhatsAppMessage(phone, stepConfig.text);
+  }
+}
+
+// 14 days in milliseconds
+const INACTIVITY_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Returns true when the conversation was last updated more than 14 days ago.
+ * A null/missing updated_at (brand-new conversation) is treated as active.
+ */
+function isReturningAfterInactivity(conversationRow) {
+  if (!conversationRow?.updated_at) return false;
+  const lastSeen = new Date(conversationRow.updated_at).getTime();
+  return (Date.now() - lastSeen) > INACTIVITY_MS;
+}
 
 const RESET_PHRASES = ['reset ai', 'reset bot'];
+const SHOW_MATCHES_PHRASES = ['show my matches', 'my matches', 'show matches'];
+const GET_STARTED_PHRASES = ['get started', 'get_started', 'start_onboarding', 'start onboarding'];
+const LEARN_MORE_PHRASES  = ['learn what this bot does', 'learn_more', 'learn more', 'what does this bot do', 'what this bot does'];
+const UPDATE_INFO_PHRASES = ['update my info', 'update_info', 'update info'];
 
-// ── Hiring/Working status flags ───────────────────────────────────────────────
-// Boolean fields answered with yes/no. Only users with a `true` flag take part
-// in matching; flipping to "no" removes their matches, flipping to "yes"
-// re-runs matching for them.
-const YESNO_STEPS = {
-  collect_hiring_status:  { field: 'hiring_currently',  next: 'collect_contact_sharing' },
-  collect_working_status: { field: 'working_currently', next: 'collect_contact_sharing' },
-  collect_contact_sharing: {
-    field: 'contact_sharing_allowed',
-    nextByRole: {
-      client: 'collect_client_brief_desc',
-      freelancer: 'collect_freelancer_brief_desc',
-    },
-  },
-};
-const BOOLEAN_FIELDS = new Set(['hiring_currently', 'working_currently', 'contact_sharing_allowed']);
-const MATCH_STATUS_FIELDS = new Set(['hiring_currently', 'working_currently']);
-const FLAG_QUESTIONS = {
-  hiring_currently:  'are you currently hiring?',
-  working_currently: 'are you currently open to work?',
-  contact_sharing_allowed: 'can matched people see your WhatsApp contact directly?',
-};
-const LINK_STEPS = {
-  collect_profile_link:  { field: 'linkedin_url', next: 'collect_github' }, // legacy alias
-  collect_linkedin:      { field: 'linkedin_url', next: 'collect_github' },
-  collect_github:        { field: 'github_url', next: 'collect_cv' },
-  collect_cv:            { field: 'cv_url', next: 'collect_support_docs' },
-  collect_support_docs:  { field: 'support_docs', next: 'collect_portfolio' },
-  collect_portfolio:     { field: 'portfolio', next: 'collect_skills' },
-};
-const LINK_FIELDS = new Set(['linkedin_url', 'github_url', 'cv_url', 'support_docs', 'portfolio']);
+/**
+ * Handles post-project rating submissions and review notes.
+ */
+async function handleFeedbackSubmission({ phone, messageText, conversation }) {
+  const lowerText = (messageText || '').toLowerCase().trim();
+  const tempData = conversation?.temp_data || {};
+  const currentFeedback = tempData.feedback || {};
 
-function canonicalLinkField(field) {
-  return field === 'profile_link' ? 'linkedin_url' : field;
-}
+  // Case A: User is submitting the optional review note (or tapping Skip Note)
+  if (conversation?.step === 'awaiting_feedback_note' && currentFeedback.rating) {
+    const isSkip = messageText === 'skip_feedback_note' || isSkipMessage(lowerText);
+    const feedbackNote = isSkip ? null : messageText.trim();
 
-function formatFieldValue(value) {
-  if (value === true) return 'yes';
-  if (value === false) return 'no';
-  return value;
-}
+    await saveReview({
+      matchId: currentFeedback.matchId,
+      reviewerPhone: phone,
+      reviewerRole: currentFeedback.reviewerRole || 'client',
+      revieweePhone: currentFeedback.revieweePhone,
+      revieweeRole: currentFeedback.revieweeRole || 'freelancer',
+      rating: currentFeedback.rating,
+      feedbackNote,
+      projectTitle: currentFeedback.projectTitle,
+    });
 
-async function applyFlagSideEffects(phone, field, value) {
-  try {
-    if (value === false) {
-      await deleteMatchesForPhone(phone);
-      return;
-    }
-    if (field === 'working_currently') {
-      await runMatchingForFreelancer(phone);
-    } else {
-      await runMatchingForClient(phone);
-    }
-  } catch (err) {
-    console.error(`[handleMessage] Flag side effects failed for ${field}=${value}, ${phone}:`, err);
+    const counterpartName = currentFeedback.counterpartName || 'your match';
+    const noteAck = feedbackNote ? `\n\n📝 Note: "${feedbackNote}"` : '';
+
+    await sendWhatsAppMessage(
+      phone,
+      `✅ *Thank you for your feedback!* Your ${currentFeedback.rating}⭐ rating for *${counterpartName}* has been verified and recorded to their reputation score.${noteAck} 🚀`
+    );
+
+    // Reset conversation step back to completed
+    const nextTempData = { ...tempData };
+    delete nextTempData.feedback;
+    await saveConversation({
+      id: conversation.id,
+      phone,
+      role: conversation.role,
+      step: 'completed',
+      temp_data: nextTempData,
+    });
+    return true;
   }
-}
 
-function nextStepForYesNo(stepConfig, role) {
-  if (stepConfig.nextByRole) return stepConfig.nextByRole[role] || 'welcome';
-  return stepConfig.next;
-}
+  // Case B: User clicked an interactive rating button or typed a rating
+  const rateButtonMatch = (messageText || '').match(/^rate_([1-5])(?:_(\d+))?$/);
+  const textRatingMatch = lowerText.match(/^(?:rate\s*)?([1-5])(?:\s*\/\s*5|\s*stars?)?$/);
 
-async function applyLinkSideEffects(phone, field) {
-  if (!LINK_FIELDS.has(field)) return;
-  try {
-    await revetArtifact(phone, field);
-  } catch (err) {
-    console.error(`[handleMessage] Link re-vet failed for ${field}, ${phone}:`, err);
+  // Only trigger text rating if user is prompted or already completed onboarding
+  if (rateButtonMatch || (textRatingMatch && conversation?.step === 'completed')) {
+    const rating = parseInt(rateButtonMatch ? rateButtonMatch[1] : textRatingMatch[1], 10);
+    const rawMatchId = rateButtonMatch ? rateButtonMatch[2] : null;
+    let matchId = rawMatchId ? parseInt(rawMatchId, 10) : null;
+
+    let counterpartName = 'your counterpart';
+    let revieweePhone = null;
+    let revieweeRole = null;
+    let reviewerRole = null;
+    let projectTitle = 'Project';
+
+    const liveMatches = await getAllLiveMatchesForPhone(phone);
+    const targetMatch =
+      (matchId && liveMatches.find(m => m.id === matchId)) ||
+      liveMatches.find(m => m.status === 'connected') ||
+      liveMatches[0];
+
+    if (targetMatch) {
+      matchId = targetMatch.id;
+      const isClient = targetMatch.job_phone === phone;
+      reviewerRole = isClient ? 'client' : 'freelancer';
+      revieweeRole = isClient ? 'freelancer' : 'client';
+      revieweePhone = isClient ? targetMatch.freelancer_phone : targetMatch.job_phone;
+
+      if (isClient) {
+        const fl = await findFreelancer(revieweePhone);
+        counterpartName = fl?.name || 'Freelancer';
+        const jr = await findJobRequest(phone);
+        projectTitle = jr?.project_description?.slice(0, 40) || 'Project';
+      } else {
+        const jr = await findJobRequest(revieweePhone);
+        counterpartName = jr?.name || 'Client';
+        projectTitle = jr?.project_description?.slice(0, 40) || 'Project';
+      }
+    }
+
+    if (!revieweePhone) {
+      if (rateButtonMatch) {
+        await sendWhatsAppMessage(phone, `Thanks for the rating! You don't have any active project matches waiting for a review right now.`);
+        return true;
+      }
+      return false;
+    }
+
+    // Save pending rating in conversation state and prompt for note
+    const nextTempData = {
+      ...tempData,
+      feedback: {
+        matchId,
+        rating,
+        counterpartName,
+        revieweePhone,
+        revieweeRole,
+        reviewerRole,
+        projectTitle,
+      },
+    };
+
+    await saveConversation({
+      id: conversation?.id,
+      phone,
+      role: conversation?.role || reviewerRole,
+      step: 'awaiting_feedback_note',
+      temp_data: nextTempData,
+    });
+
+    const starIcons = '⭐'.repeat(rating);
+    const buttons = [{ id: 'skip_feedback_note', title: 'Skip Note' }];
+
+    await sendWhatsAppButtons(
+      phone,
+      `Got it! You gave *${counterpartName}* ${rating} / 5 ${starIcons}.\n\nWould you like to leave a quick note about your experience? (e.g. "Great communication and delivered on time!")\n\nOr tap *Skip Note* to submit right away:`,
+      buttons,
+      '⭐ Add Review Note',
+      'Tap Skip Note to submit now'
+    );
+    return true;
   }
-}
 
-function pendingBrokenArtifact(freelancer) {
-  const broken = freelancer?.trust_breakdown?.broken_links || [];
-  const uniqueArtifacts = [...new Set(broken.map((item) => item.artifact).filter((artifact) => LINK_FIELDS.has(artifact)))];
-  return uniqueArtifacts.length === 1 ? uniqueArtifacts[0] : null;
+  return false;
 }
 
 export async function handleIncomingMessage({ phone, messageText }) {
   // Artificial delay to ensure "typing..." indicator is visible even on fast paths
   await new Promise(resolve => setTimeout(resolve, 800));
 
-  const lowerText = (messageText || '').toLowerCase();
+  const lowerText = (messageText || '').toLowerCase().trim();
 
-  const [conversation, freelancer] = await Promise.all([
+  const [conversation, freelancer, activeMatches] = await Promise.all([
     findConversation(phone),
     findFreelancer(phone),
+    getActiveMatchesForPhone(phone),
   ]);
+
+  // --- 0. RETURNING-USER INACTIVITY GATE ---
+  // If the user hasn't messaged in 14+ days, send the interactive welcome menu
+  // (mirrors the Icebreaker experience for first-time users) and stop.
+  if (isReturningAfterInactivity(conversation)) {
+    const daysSince = Math.floor(
+      (Date.now() - new Date(conversation.updated_at).getTime()) / 86_400_000
+    );
+    console.log(`[welcome] returning user ${phone}, inactive for ${daysSince} days`);
+    await sendWelcomeInteractive(phone);
+    return;
+  }
+
+  // --- 0.4 META ICEBREAKER PLAIN-TEXT COMMANDS ---
+  // When users tap Meta Icebreaker prompts configured in WhatsApp Manager UI,
+  // Meta sends them as plain text messages (e.g. "Get started", "Learn what this bot does").
+  if (GET_STARTED_PHRASES.includes(lowerText)) {
+    await handleIcebreakerReply(phone, 'start_onboarding', messageText);
+    return;
+  }
+  if (LEARN_MORE_PHRASES.includes(lowerText)) {
+    await handleIcebreakerReply(phone, 'learn_more', messageText);
+    return;
+  }
+  if (UPDATE_INFO_PHRASES.includes(lowerText)) {
+    await handleIcebreakerReply(phone, 'update_info', messageText);
+    return;
+  }
+
+  // --- 0.5 SHOW MY MATCHES ---
+  if (SHOW_MATCHES_PHRASES.some((phrase) => lowerText.includes(phrase))) {
+    const liveMatches = await getAllLiveMatchesForPhone(phone);
+
+    if (liveMatches.length === 0) {
+      await sendWhatsAppMessage(phone, `You don't have any active matches right now. We'll notify you as soon as one comes up! 🔔`);
+      return;
+    }
+
+    // Collect all unique counterpart phones so we can batch-fetch profiles
+    const freelancerPhones = new Set();
+    const clientPhones = new Set();
+    for (const m of liveMatches) {
+      if (m.freelancer_phone !== phone) freelancerPhones.add(m.freelancer_phone);
+      if (m.job_phone !== phone) clientPhones.add(m.job_phone);
+    }
+
+    // Fetch counterpart profiles in parallel
+    const profilePromises = [];
+    const freelancerMap = new Map();
+    const jobMap = new Map();
+
+    for (const fp of freelancerPhones) {
+      profilePromises.push(findFreelancer(fp).then(p => p && freelancerMap.set(fp, p)));
+    }
+    for (const cp of clientPhones) {
+      profilePromises.push(findJobRequest(cp).then(j => j && jobMap.set(cp, j)));
+    }
+    // Also fetch own profiles in case we're on the other side
+    profilePromises.push(findFreelancer(phone).then(p => p && freelancerMap.set(phone, p)));
+    profilePromises.push(findJobRequest(phone).then(j => j && jobMap.set(phone, j)));
+    await Promise.all(profilePromises);
+
+    const blocks = liveMatches.map((m, i) => {
+      const isClient = m.job_phone === phone;
+      const otherPhone = isClient ? m.freelancer_phone : m.job_phone;
+
+      // Resolve the counterpart's name and the project description
+      let otherName;
+      let projectDesc;
+      if (isClient) {
+        const fl = freelancerMap.get(otherPhone);
+        otherName = fl?.name || otherPhone;
+        const jr = jobMap.get(phone);
+        projectDesc = jr?.project_description || jr?.brief_description || 'N/A';
+      } else {
+        const jr = jobMap.get(otherPhone);
+        otherName = jr?.name || otherPhone;
+        projectDesc = jr?.project_description || jr?.brief_description || 'N/A';
+      }
+
+      // Determine the human-readable stage
+      let stage;
+      if (m.status === 'connected') {
+        stage = '✅ Connected';
+      } else if (m.status === 'awaiting_response') {
+        // Figure out whose turn it is
+        const isFirstParty = m.initiator_role === (isClient ? 'freelancer' : 'client');
+        stage = isFirstParty ? '⏳ Awaiting your response' : '⏳ Awaiting their response';
+      } else if (m.status === 'awaiting_other') {
+        const isFirstParty = m.initiator_role === (isClient ? 'freelancer' : 'client');
+        stage = isFirstParty ? '⏳ Awaiting their response' : '⏳ Awaiting your response';
+      } else {
+        stage = '🔍 Pending';
+      }
+
+      const lines = [
+        `*Match ${i + 1}:* ${otherName}`,
+        `📋 ${projectDesc}`,
+        stage,
+      ];
+
+      // For connected matches, re-include contact info
+      if (m.status === 'connected') {
+        if (isClient) {
+          const fl = freelancerMap.get(otherPhone);
+          lines.push(`📞 ${fl?.phone || otherPhone}`);
+          if (fl?.profile_link) lines.push(`🔗 ${fl.profile_link}`);
+        } else {
+          lines.push(`📞 ${otherPhone}`);
+        }
+      }
+
+      return lines.join('\n');
+    });
+
+    const header = `📊 *Your Matches (${liveMatches.length}):*\n`;
+    await sendWhatsAppMessage(phone, header + '\n' + blocks.join('\n\n'));
+    return;
+  }
 
   // --- 1. RESET ---
   if (RESET_PHRASES.some((phrase) => lowerText.includes(phrase))) {
@@ -134,55 +338,243 @@ export async function handleIncomingMessage({ phone, messageText }) {
     return;
   }
 
-  // --- 1a. CONTACT REQUEST APPROVAL / REQUEST COMMANDS (local — NO Groq call) ---
-  if (await handlePendingContactApproval({ phone, messageText })) {
+  // --- 1.2 POST-PROJECT FEEDBACK & RATINGS ---
+  const feedbackHandled = await handleFeedbackSubmission({ phone, messageText, conversation });
+  if (feedbackHandled) {
     return;
   }
 
-  if (await handlePendingMatchFeedback({ phone, conversation, messageText })) {
+  // --- 1.3 WEEKLY AVAILABILITY PULSE REPLIES ---
+  const pulseMatch = parsePulseSelection(messageText);
+  if (pulseMatch) {
+    await updateFreelancerPulseStatus(phone, pulseMatch);
+    await sendWhatsAppMessage(phone, pulseMatch.replyMessage);
     return;
   }
 
-  const contactCommand = parseContactRequestCommand(messageText);
-  if (contactCommand) {
-    const requesterRole = freelancer ? 'freelancer' : conversation?.role;
-    await requestContactForMatchRank({
-      requesterPhone: phone,
-      requesterRole,
-      rank: contactCommand.rank,
-    });
-    return;
-  }
+  // --- 1.5 MATCH NOTIFICATION RESPONSES ---
+  // If the user has a pending match and they reply with "interested" or "not interested"
+  const pendingMatch = activeMatches.find(m => m.status === 'awaiting_response' || m.status === 'awaiting_other');
+  
+  if (pendingMatch) {
+    // Determine the user's role in this match
+    const isClient = pendingMatch.job_phone === phone;
+    const role = isClient ? 'client' : 'freelancer';
+    
+    // Check if it's their turn to respond
+    // If it's awaiting_response, the first notified party should respond.
+    // If it's awaiting_other, the SECOND party should respond.
+    const isFirstParty = pendingMatch.initiator_role === (isClient ? 'freelancer' : 'client');
+    const isTheirTurn = (pendingMatch.status === 'awaiting_response' && isFirstParty) ||
+                        (pendingMatch.status === 'awaiting_other' && !isFirstParty);
 
-  const matchLifecycleCommand = parseMatchLifecycleCommand(messageText);
-  if (matchLifecycleCommand && (freelancer || conversation?.step === 'completed')) {
-    const role = freelancer ? 'freelancer' : conversation?.role;
-    await handleMatchLifecycleCommand({
-      phone,
-      role,
-      conversation,
-      command: matchLifecycleCommand,
-    });
-    return;
-  }
+    if (isTheirTurn) {
+      const isDeclined = lowerText === 'not interested' || lowerText === 'no' || lowerText.startsWith('match_declined');
+      const isInterested = lowerText === 'interested' || lowerText === 'yes' || lowerText.startsWith('match_interested');
 
-  // --- 1b. COMPLETED FREELANCER LINK RE-VET FAST-PATH ---
-  // A completed freelancer can resend just one broken proof link. We classify
-  // locally and re-check only that artifact — no Groq call.
-  const incomingUrl = extractFirstUrl(messageText);
-  if (conversation?.step === 'completed' && freelancer && incomingUrl) {
-    const field = canonicalLinkField(classifyLinkField(incomingUrl) || pendingBrokenArtifact(freelancer));
-    if (field && LINK_FIELDS.has(field)) {
-      await updateFreelancerField(phone, field, incomingUrl);
-      await sendWhatsAppMessage(phone, `Got it — re-checking your ${field.replace('_', ' ')} now.`);
-      await applyLinkSideEffects(phone, field);
+      if (isDeclined) {
+        await updateMatchStatus(pendingMatch.id, { 
+          status: 'declined', 
+          declined_by: role,
+          responded_at: new Date().toISOString()
+        });
+        await sendWhatsAppMessage(phone, "Got it, we've passed on this match and will continue looking for you.");
+        // TODO: advance to next rank in batch
+        return;
+      } 
+      
+      if (isInterested) {
+        if (pendingMatch.status === 'awaiting_response') {
+          // First party accepted!
+          await updateMatchStatus(pendingMatch.id, { 
+            status: 'awaiting_other',
+            responded_at: new Date().toISOString()
+          });
+          
+          await sendWhatsAppMessage(phone, "Awesome! We've notified the other party. We'll share contact info as soon as they confirm.");
+          
+          // Notify the other party with interactive buttons
+          const otherPhone = isClient ? pendingMatch.freelancer_phone : pendingMatch.job_phone;
+          const notifyText = [
+            `🎉 The ${role} has reviewed your profile and is interested in matching!`,
+            ``,
+            `Reply *interested* if you'd like to connect, or *not interested* to pass.`
+          ].join('\n');
+          const buttons = [
+            { id: 'match_interested', title: '✅ Interested' },
+            { id: 'match_declined',   title: '❌ Not Interested' },
+          ];
+          await sendWhatsAppButtons(
+            otherPhone,
+            notifyText,
+            buttons,
+            '🎉 Match Opportunity',
+            'Tap an option to respond'
+          );
+          return;
+          
+        } else if (pendingMatch.status === 'awaiting_other') {
+          // Both parties accepted!
+          await updateMatchStatus(pendingMatch.id, { 
+            status: 'connected',
+            responded_at: new Date().toISOString()
+          });
+
+          // Mark both parties as unavailable so they stop receiving new matches
+          await Promise.all([
+            setAvailability(pendingMatch.freelancer_phone, 'freelancer', false),
+            setAvailability(pendingMatch.job_phone, 'client', false),
+          ]);
+          
+          // Fetch the full profiles
+          const [freelancerProfile, jobRequest] = await Promise.all([
+            findFreelancer(pendingMatch.freelancer_phone),
+            findJobRequest(pendingMatch.job_phone)
+          ]);
+
+          // Contact card for the freelancer (sent to the client)
+          const freelancerCard = [
+            `It's a match! 🥳`,
+            ``,
+            `Here are the contact details for the freelancer:`,
+            `*Name:* ${freelancerProfile?.name || 'N/A'}`,
+            `*Phone:* ${freelancerProfile?.phone || pendingMatch.freelancer_phone}`,
+            freelancerProfile?.profile_link ? `*Profile:* ${freelancerProfile.profile_link}` : '',
+            freelancerProfile?.portfolio ? `*Portfolio:* ${freelancerProfile.portfolio}` : '',
+            freelancerProfile?.rate ? `*Rate:* ${freelancerProfile.rate}` : '',
+            ``,
+            `You can now message them directly to discuss the project!`
+          ].filter(Boolean).join('\n');
+
+          // Contact card for the client (sent to the freelancer)
+          const clientCard = [
+            `It's a match! 🥳`,
+            ``,
+            `Here are the contact details for the client:`,
+            `*Name:* ${jobRequest?.name || 'N/A'}`,
+            `*Phone:* ${jobRequest?.phone || pendingMatch.job_phone}`,
+            ``,
+            `*Project Reminder:*`,
+            jobRequest?.project_description || jobRequest?.brief_description || 'N/A',
+            ``,
+            `They have been given your number and you can also message them directly!`
+          ].filter(Boolean).join('\n');
+
+          if (isClient) {
+            await sendWhatsAppMessage(phone, freelancerCard);
+            await sendWhatsAppMessage(pendingMatch.freelancer_phone, clientCard);
+          } else {
+            await sendWhatsAppMessage(phone, clientCard);
+            await sendWhatsAppMessage(pendingMatch.job_phone, freelancerCard);
+          }
+
+          // ── Feature 8: Return-to-Matching Prompt ──────────────────────────
+          // After contact is shared, ask both parties if they want to keep
+          // receiving matches with interactive buttons.
+          const availPrompt = `Would you like to continue receiving matches? Tap below to stay active or pause.`;
+          const availButtons = [
+            { id: 'avail_active_yes', title: '🟢 Keep Active' },
+            { id: 'avail_active_no',  title: '⏸️ Pause Matches' },
+          ];
+
+          const [flConv, clConv] = await Promise.all([
+            findConversation(pendingMatch.freelancer_phone),
+            findConversation(pendingMatch.job_phone),
+          ]);
+
+          const flagUpdates = [];
+          if (flConv && !flConv.temp_data?.awaiting_availability_response) {
+            flagUpdates.push(saveConversation({
+              id: flConv.id,
+              phone: pendingMatch.freelancer_phone,
+              role: flConv.role,
+              step: flConv.step,
+              temp_data: { ...flConv.temp_data, awaiting_availability_response: true },
+            }));
+          }
+          if (clConv && !clConv.temp_data?.awaiting_availability_response) {
+            flagUpdates.push(saveConversation({
+              id: clConv.id,
+              phone: pendingMatch.job_phone,
+              role: clConv.role,
+              step: clConv.step,
+              temp_data: { ...clConv.temp_data, awaiting_availability_response: true },
+            }));
+          }
+          await Promise.all(flagUpdates);
+
+          await sendWhatsAppButtons(pendingMatch.freelancer_phone, availPrompt, availButtons, 'Availability Status', 'Tap an option');
+          await sendWhatsAppButtons(pendingMatch.job_phone, availPrompt, availButtons, 'Availability Status', 'Tap an option');
+
+          return;
+        }
+      }
+
+      // Catch-all: user has a pending match and it's their turn, but they
+      // sent something other than "interested" / "not interested".
+      const buttons = [
+        { id: 'match_interested', title: '✅ Interested' },
+        { id: 'match_declined',   title: '❌ Not Interested' },
+      ];
+      await sendWhatsAppButtons(
+        phone,
+        `You have a match waiting for your response!\n\nReply *interested* to connect, or *not interested* to pass.`,
+        buttons,
+        '⏳ Match Waiting',
+        'Tap an option'
+      );
       return;
     }
   }
 
+  // --- 1.7 AVAILABILITY PROMPT RESPONSES ---
+  // If the user has an outstanding "continue receiving matches?" question,
+  // handle yes/no before any other handler can intercept the message.
+  if (conversation?.temp_data?.awaiting_availability_response) {
+    const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yea', 'sure', 'y', 'avail_active_yes']);
+    const NO_WORDS  = new Set(['no', 'nope', 'nah', 'n', 'avail_active_no']);
+
+    // Clear the pending flag regardless of answer
+    const cleanTempData = { ...conversation.temp_data };
+    delete cleanTempData.awaiting_availability_response;
+
+    if (YES_WORDS.has(lowerText)) {
+      await setAvailability(phone, conversation.role, true);
+      await saveConversation({
+        id: conversation.id, phone, role: conversation.role,
+        step: conversation.step, temp_data: cleanTempData,
+      });
+      await sendWhatsAppMessage(phone, `You're back in the pool — we'll notify you when there's a match! 🎯`);
+      return;
+    }
+
+    if (NO_WORDS.has(lowerText)) {
+      await saveConversation({
+        id: conversation.id, phone, role: conversation.role,
+        step: conversation.step, temp_data: cleanTempData,
+      });
+      await sendWhatsAppMessage(phone, `No problem — you're paused. Message us anytime you want back in! ✌️`);
+      return;
+    }
+
+    // Unrecognised reply — re-prompt with buttons
+    const availButtons = [
+      { id: 'avail_active_yes', title: '🟢 Keep Active' },
+      { id: 'avail_active_no',  title: '⏸️ Pause Matches' },
+    ];
+    await sendWhatsAppButtons(
+      phone,
+      `Would you like to continue receiving matches? Reply *yes* to stay active, or *no* to pause.`,
+      availButtons,
+      'Availability Status',
+      'Tap an option'
+    );
+    return;
+  }
+
   // --- 2. ACTIVE EDITING STATE ---
   if (conversation?.temp_data?.editing_field) {
-    const editingField = canonicalLinkField(conversation.temp_data.editing_field);
+    const editingField = conversation.temp_data.editing_field;
     
     if (editingField === 'vague') {
       const aiResult = await extractConversationData({
@@ -205,25 +597,10 @@ export async function handleIncomingMessage({ phone, messageText }) {
       }
     } else {
       // Receiving the new value for the active editingField
-      let newValue = messageText.trim();
-
-      // Flag fields are booleans — coerce a yes/no answer, and re-ask instead
-      // of storing free text when the answer isn't a clear yes or no.
-      if (BOOLEAN_FIELDS.has(editingField)) {
-        const parsed = parseYesNoLocally(newValue);
-        if (parsed === null) {
-          await sendWhatsAppMessage(phone, `Just a quick yes or no — ${FLAG_QUESTIONS[editingField]}`);
-          return;
-        }
-        newValue = parsed;
-      }
-      if (LINK_FIELDS.has(editingField)) {
-        newValue = isSkipMessage(messageText) ? null : (extractFirstUrl(messageText) || newValue);
-      }
-
+      const newValue = messageText.trim();
       const newTempData = { ...conversation.temp_data };
       newTempData[editingField] = newValue;
-
+      
       const resumeStep = newTempData.resume_step || conversation.step;
       delete newTempData.editing_field;
       delete newTempData.resume_step;
@@ -234,17 +611,9 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
       if (freelancer) {
         await updateFreelancerField(phone, editingField, newValue);
-      } else if (conversation.role === 'client') {
-        await updateJobRequestField(phone, editingField, newValue);
       }
 
-      await sendWhatsAppMessage(phone, pickEditSuccessReply(editingField, formatFieldValue(newValue)));
-      if (MATCH_STATUS_FIELDS.has(editingField)) {
-        await applyFlagSideEffects(phone, editingField, newValue);
-      }
-      if (freelancer && LINK_FIELDS.has(editingField)) {
-        await applyLinkSideEffects(phone, editingField);
-      }
+      await sendWhatsAppMessage(phone, pickEditSuccessReply(editingField, newValue));
       return;
     }
   }
@@ -261,8 +630,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
     if (conversation.step === 'completed') {
       await sendWhatsAppMessage(phone, pickPostCompletionReply());
     } else {
-      const { text } = pickReplyText(conversation.step);
-      await sendWhatsAppMessage(phone, text);
+      await sendStepMessage(phone, conversation.step, conversation.temp_data);
     }
     return;
   }
@@ -277,7 +645,7 @@ export async function handleIncomingMessage({ phone, messageText }) {
       // Build a synthetic aiResult that looks identical to what Groq would return
       aiResult = {
         role: conversation.role,
-        next_step: 'collect_hiring_status',
+        next_step: 'collect_client_brief_desc',
         extracted_data: {
           ...(conversation.temp_data || {}),
           deadline: localResult.deadline_normalized,
@@ -294,140 +662,115 @@ export async function handleIncomingMessage({ phone, messageText }) {
         step: aiResult.next_step,
         temp_data: aiResult.extracted_data,
       });
-      const { text } = pickReplyText(aiResult.next_step);
-      await sendWhatsAppMessage(phone, text);
+      await sendStepMessage(phone, aiResult.next_step, aiResult.extracted_data);
       return;
     }
     // confidence === 'low' → fall through to Groq below
   }
 
-  // --- 4b. HIRING/WORKING STATUS FAST-PATH (local parser — NO Groq call) ---
-  // A clear yes/no at these steps sets the boolean flag and advances without
-  // an API call. Ambiguous answers fall through to Groq, whose prompt re-asks.
-  if (YESNO_STEPS[conversation?.step]) {
-    const parsed = parseYesNoLocally(messageText);
-    if (parsed !== null) {
-      const stepConfig = YESNO_STEPS[conversation.step];
-      const { field } = stepConfig;
-      const next = nextStepForYesNo(stepConfig, conversation.role);
-      await saveConversation({
-        id: conversation.id,
-        phone,
-        role: conversation.role,
-        step: next,
-        temp_data: { ...(conversation.temp_data || {}), [field]: parsed },
-      });
-      await sendWhatsAppMessage(phone, pickReplyText(next).text);
-      return;
-    }
-  }
-
-  // --- 5. LINK FAST-PATH (local parser — NO Groq call) ---
-  if (conversation && LINK_STEPS[conversation.step]) {
-    const { field, next } = LINK_STEPS[conversation.step];
-    const url = extractFirstUrl(messageText);
-    if (url || isSkipMessage(messageText)) {
-      const tempData = {
-        ...(conversation.temp_data || {}),
-        [field]: url || null,
-      };
-      await saveConversation({
-        id: conversation.id,
-        phone,
-        role: conversation.role,
-        step: next,
-        temp_data: tempData,
-      });
-      await sendWhatsAppMessage(phone, pickReplyText(next).text);
-      return;
-    }
-  }
-
-  // --- 6. NORMAL GROQ EXTRACTION (one call, same as before) ---
-  aiResult = await extractConversationData({
-    step: conversation?.step,
-    role: conversation?.role,
-    tempData: conversation?.temp_data,
-    messageText,
-  });
-
-  // Suppress edit intent for pure acknowledgement messages
-  if (isAckOnly(messageText) && aiResult.edit_request) {
-    aiResult.edit_request.is_edit = false;
-  }
-
-  // ── PURE DATA COLLECTION GUARD ──────────────────────────────────────────
-  // The brief_desc and collect_project steps collect free-form text that may
-  // contain words like "edit", "change", "update" — these are part of the
-  // user's answer, NOT edit requests for a previous field. Force is_edit=false
-  // here as a code-level safety net regardless of what Groq returned.
-  const PURE_DATA_STEPS = new Set([
-    'collect_client_brief_desc',
-    'collect_freelancer_brief_desc',
-    'collect_project',
-  ]);
-  if (PURE_DATA_STEPS.has(conversation?.step) && aiResult.edit_request) {
-    aiResult.edit_request.is_edit = false;
-  }
-
-  // Post-Groq deadline guard: if Groq still didn't advance (unusual phrasing
-  // that passed local check with low confidence), force advancement using the
-  // raw message as the deadline value.
-  if (
-    conversation?.step === 'collect_deadline' &&
-    aiResult.next_step === 'collect_deadline'
-  ) {
-    aiResult.next_step = 'collect_hiring_status';
-    aiResult.extracted_data = {
-      ...(aiResult.extracted_data || {}),
-      deadline: aiResult.extracted_data?.deadline || messageText.trim(),
+  // --- 5. SKIP PROFILE LINK ---
+  if (conversation && conversation.step === 'collect_profile_link' && isSkipMessage(messageText)) {
+    aiResult = {
+      role: conversation.role,
+      next_step: 'collect_portfolio',
+      extracted_data: { ...(conversation.temp_data || {}), profile_link: null }
     };
-    if (aiResult.edit_request) aiResult.edit_request.is_edit = false;
-  }
+  } else if (conversation && conversation.step === 'collect_client_brief_desc' && isSkipMessage(messageText)) {
+    // --- 5b. SKIP CLIENT BRIEF DESC (optional field) ---
+    aiResult = {
+      role: conversation.role,
+      next_step: 'completed',
+      extracted_data: { ...(conversation.temp_data || {}), brief_description: null },
+      edit_request: { is_edit: false, target_field: null, provided_value: null },
+    };
+  } else {
+    // --- 6. TRY LOCAL HANDLER FIRST (no Groq call for ~80% of messages) ---
+    const resolvedRole = conversation?.role || null;
+    const localResult = tryHandleLocally(conversation?.step, resolvedRole, messageText, conversation?.temp_data);
 
-  // Ensure deadline_normalized is never null when deadline_raw has a value.
-  // Runs on every Groq response — cheap (no API call), idempotent.
-  if (conversation?.step === 'collect_deadline' || aiResult.extracted_data?.deadline_raw) {
-    ensureDeadlineNormalized(aiResult.extracted_data);
+    if (localResult) {
+      // Local handler succeeded — suppress edit intent on pure ack messages
+      if (isAckOnly(messageText) && localResult.edit_request) {
+        localResult.edit_request.is_edit = false;
+      }
+      aiResult = localResult;
+    } else {
+      // --- 6b. FALL BACK TO GROQ (ambiguous input — role phrasing, hire-type, etc.) ---
+      aiResult = await extractConversationData({
+        step: conversation?.step,
+        role: resolvedRole,
+        tempData: conversation?.temp_data,
+        messageText,
+      });
+
+      // Suppress edit intent for pure acknowledgement messages
+      if (isAckOnly(messageText) && aiResult.edit_request) {
+        aiResult.edit_request.is_edit = false;
+      }
+
+      // PURE DATA COLLECTION GUARD
+      const PURE_DATA_STEPS = new Set([
+        'collect_client_brief_desc',
+        'collect_freelancer_brief_desc',
+        'collect_project',
+      ]);
+      if (PURE_DATA_STEPS.has(conversation?.step) && aiResult.edit_request) {
+        aiResult.edit_request.is_edit = false;
+      }
+
+      // Post-Groq deadline guard
+      if (
+        conversation?.step === 'collect_deadline' &&
+        aiResult.next_step === 'collect_deadline'
+      ) {
+        aiResult.next_step = 'collect_client_brief_desc';
+        aiResult.extracted_data = {
+          ...(aiResult.extracted_data || {}),
+          deadline: aiResult.extracted_data?.deadline || messageText.trim(),
+        };
+        if (aiResult.edit_request) aiResult.edit_request.is_edit = false;
+      }
+
+      // Post-Groq availability guard
+      if (
+        conversation?.step === 'collect_availability' &&
+        aiResult.next_step === 'collect_availability'
+      ) {
+        aiResult.next_step = 'collect_preferences';
+        aiResult.extracted_data = {
+          ...(aiResult.extracted_data || {}),
+          availability: aiResult.extracted_data?.availability || messageText.trim(),
+        };
+        if (aiResult.edit_request) aiResult.edit_request.is_edit = false;
+      }
+
+      // Ensure deadline_normalized is never null when deadline_raw has a value
+      if (conversation?.step === 'collect_deadline' || aiResult.extracted_data?.deadline_raw) {
+        ensureDeadlineNormalized(aiResult.extracted_data);
+      }
+    }
   }
 
   // --- 7. NEW EDIT REQUEST ---
   if (aiResult.edit_request?.is_edit) {
-    const field = canonicalLinkField(aiResult.edit_request.target_field);
-    let value = aiResult.edit_request.provided_value;
+    const field = aiResult.edit_request.target_field;
+    const value = aiResult.edit_request.provided_value;
     const currentStep = conversation?.step || aiResult.next_step;
 
-    // Flag fields are booleans — coerce a provided yes/no value. If it isn't a
-    // clear yes/no, null it out so the ask-for-value branch below takes over.
-    if (field && BOOLEAN_FIELDS.has(field) && value != null && typeof value !== 'boolean') {
-      value = parseYesNoLocally(String(value));
-    }
-
-    if (field && (value || value === false)) {
-      if (field && LINK_FIELDS.has(field)) {
-        value = isSkipMessage(String(value)) ? null : (extractFirstUrl(String(value)) || value);
-      }
+    if (field && value) {
       // Direct update — merge with existing temp_data to avoid losing fields
       const newTempData = { ...(conversation?.temp_data || {}), ...(aiResult.extracted_data || {}) };
       newTempData[field] = value;
-
+      
       await saveConversation({
         id: conversation?.id ?? null, phone, role: aiResult.role, step: currentStep, temp_data: newTempData
       });
 
       if (freelancer) {
         await updateFreelancerField(phone, field, value);
-      } else if ((conversation?.role || aiResult.role) === 'client') {
-        await updateJobRequestField(phone, field, value);
       }
 
-      await sendWhatsAppMessage(phone, pickEditSuccessReply(field, formatFieldValue(value)));
-      if (MATCH_STATUS_FIELDS.has(field)) {
-        await applyFlagSideEffects(phone, field, value);
-      }
-      if (freelancer && LINK_FIELDS.has(field)) {
-        await applyLinkSideEffects(phone, field);
-      }
+      await sendWhatsAppMessage(phone, pickEditSuccessReply(field, value));
       return;
     } else if (field) {
       // Specific field, ask for value — merge with existing temp_data
@@ -457,14 +800,68 @@ export async function handleIncomingMessage({ phone, messageText }) {
     }
   }
 
-  // --- 6. ALREADY COMPLETED CHECK ---
-  // If no edit request and they are completed, ignore the message and send the fallback reply
-  if (freelancer) {
-    await sendWhatsAppMessage(phone, getAlreadyRegisteredReply());
-    return;
-  }
-  if (conversation && conversation.step === 'completed') {
-    await sendWhatsAppMessage(phone, pickPostCompletionReply());
+  // --- 6. ALREADY COMPLETED / ON-DEMAND MATCH CHECK ---
+  // If they are fully registered, check if this is an on-demand match request.
+  // Otherwise, ignore the message and send the fallback reply.
+  if (freelancer || (conversation && conversation.step === 'completed')) {
+    const ON_DEMAND_TRIGGERS = new Set(['?', '??', '???', 'bro', 'hey', 'hi', 'matches?']);
+    const isMatchCheck = ON_DEMAND_TRIGGERS.has(lowerText) ||
+                         lowerText.includes('any match') ||
+                         lowerText.includes('find match') ||
+                         lowerText.includes('search');
+
+    if (isMatchCheck) {
+      let role = 'freelancer';
+      let profile = freelancer;
+      if (!profile) {
+        profile = await findJobRequest(phone);
+        role = 'client';
+      }
+
+      if (profile) {
+        try {
+          let matches = [];
+          if (role === 'freelancer') {
+            matches = await findMatchesForFreelancer(profile);
+            if (matches.length > 0) {
+              await persistAndNotifyMatches({
+                matches,
+                initiatorRole: 'freelancer',
+                initiatorPhone: phone,
+                jobData: null,
+                freelancerData: profile,
+              });
+              await sendWhatsAppMessage(phone, `Found ${matches.length} project match${matches.length > 1 ? 'es' : ''} for you! 🎯`);
+            }
+          } else {
+            matches = await findMatchesForClient(profile);
+            if (matches.length > 0) {
+              await persistAndNotifyMatches({
+                matches,
+                initiatorRole: 'client',
+                initiatorPhone: phone,
+                jobData: profile,
+              });
+              await sendWhatsAppMessage(phone, `Found ${matches.length} matching freelancer${matches.length > 1 ? 's' : ''}, reaching out to them now! 🎯`);
+            }
+          }
+
+          if (matches.length === 0) {
+            await sendWhatsAppMessage(phone, `Still searching — no match yet, but we'll notify you the moment one shows up! 🔔`);
+          }
+        } catch (err) {
+          console.error('[matching] Error during on-demand match check:', err);
+          await sendWhatsAppMessage(phone, `We ran into an issue checking your matches, but we'll keep looking!`);
+        }
+        return;
+      }
+    }
+
+    if (freelancer) {
+      await sendWhatsAppMessage(phone, getAlreadyRegisteredReply());
+    } else {
+      await sendWhatsAppMessage(phone, pickPostCompletionReply());
+    }
     return;
   }
 
@@ -484,12 +881,11 @@ export async function handleIncomingMessage({ phone, messageText }) {
   await saveConversation({
     id: conversation?.id ?? null,
     phone,
-    role: aiResult.role,
+    role: aiResult.role || conversation?.role || null,
     step: aiResult.next_step,
     temp_data: mergedTempData,
   });
 
-  let completedRole = null;
   if (aiResult.next_step === 'completed') {
     // aiResult.role can be null on the final brief_desc step because Groq doesn't
     // always re-emit it. Fall back to the role stored in the conversation row,
@@ -500,41 +896,66 @@ export async function handleIncomingMessage({ phone, messageText }) {
 
     if (effectiveRole === 'freelancer') {
       await saveFreelancerProfile(phone, mergedTempData);
-      completedRole = 'freelancer';
+
+      // Send the completion confirmation message FIRST and await it
+      await sendWhatsAppMessage(phone, pickReplyText('completed').text);
+
+      // ── Phase 1: Bidirectional Matching (Freelancer → Clients) ───────────
+      try {
+        const freelancerData = { phone, ...mergedTempData };
+        const matches = await findMatchesForFreelancer(freelancerData);
+        console.log(`[matching] ${matches.length} match(es) found for new freelancer ${phone}`);
+
+        if (matches.length > 0) {
+          await persistAndNotifyMatches({
+            matches,
+            initiatorRole: 'freelancer',
+            initiatorPhone: phone,
+            jobData: null, // N/A, they are matching against multiple jobs
+            freelancerData,
+          });
+          await sendWhatsAppMessage(phone, `Found ${matches.length} project match${matches.length > 1 ? 'es' : ''} for you! 🎯`);
+        } else {
+          await sendWhatsAppMessage(phone, `We couldn't find an immediate match right now — but we'll notify you as soon as a matching project is available! 🔔`);
+        }
+      } catch (matchErr) {
+        console.error('[matching] Error during freelancer matching flow:', matchErr);
+      }
+
     } else if (effectiveRole === 'client') {
       await saveJobRequest(phone, mergedTempData);
-      completedRole = 'client';
+
+      // Send the completion confirmation message FIRST and await it
+      await sendWhatsAppMessage(phone, pickReplyText('completed').text);
+
+      // ── Phase 1: Bidirectional Matching (Client → Freelancers) ───────────
+      try {
+        const jobRequest = { phone, ...mergedTempData };
+        const matches = await findMatchesForClient(jobRequest);
+        console.log(`[matching] ${matches.length} match(es) found for new client ${phone}`);
+
+        if (matches.length > 0) {
+          await persistAndNotifyMatches({
+            matches,
+            initiatorRole: 'client',
+            initiatorPhone: phone,
+            jobData: jobRequest,
+          });
+          await sendWhatsAppMessage(phone, `Found ${matches.length} matching freelancer${matches.length > 1 ? 's' : ''}, reaching out to them now! 🎯`);
+        } else {
+          await sendWhatsAppMessage(phone, `We couldn't find an immediate match right now — but we'll notify you as soon as a matching freelancer is available! 🔔`);
+        }
+      } catch (matchErr) {
+        console.error('[matching] Error during client matching flow:', matchErr);
+        // Don't block the completion reply
+      }
     } else {
       console.warn('[handleMessage] Completion reached but role is unknown — no permanent row written. aiResult.role:', aiResult.role, 'conversation.role:', conversation?.role);
+      await sendWhatsAppMessage(phone, pickReplyText('completed').text);
     }
+
+    return;
   }
 
-  // Use the niche-aware picker for collect_preferences, generic picker for everything else
-  const replyText = aiResult.next_step === 'collect_preferences'
-    ? pickPreferencesReply(mergedTempData)
-    : pickReplyText(aiResult.next_step).text;
-  await sendWhatsAppMessage(phone, replyText);
-
-  // Matching runs AFTER the completion reply so "All done! 🎉" arrives before
-  // the match results. A matching failure must never surface to the user —
-  // their profile is already saved at this point.
-  if (completedRole) {
-    if (completedRole === 'freelancer') {
-      try {
-        await runVettingForFreelancer(phone);
-      } catch (err) {
-        console.error(`[handleMessage] Vetting failed for freelancer ${phone}:`, err);
-      }
-    }
-
-    try {
-      if (completedRole === 'client') {
-        await runMatchingForClient(phone);
-      } else {
-        await runMatchingForFreelancer(phone);
-      }
-    } catch (err) {
-      console.error(`[handleMessage] Matching failed for ${completedRole} ${phone}:`, err);
-    }
-  }
+  await sendStepMessage(phone, aiResult.next_step, mergedTempData);
 }

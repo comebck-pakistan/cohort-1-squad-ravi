@@ -214,7 +214,7 @@ export async function extractConversationData({ step, role, tempData, messageTex
   }
 
   return {
-    role: parsed.role || null,
+    role: parsed.role || role || null,   // never lose the role Groq already confirmed
     next_step: parsed.next_step || 'welcome',
     extracted_data: normalised,
     edit_request: editRequest,

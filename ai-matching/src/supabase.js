@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
+import { generateEmbedding, buildFreelancerEmbeddingText, buildJobEmbeddingText } from './embeddings.js';
 
 // Service role key bypasses RLS entirely - same as the n8n Supabase credential did.
 export const supabase = createClient(config.supabase.url, config.supabase.serviceRoleKey);
@@ -21,40 +22,6 @@ export async function findConversation(phone) {
   return data && data.length > 0 ? data[0] : null;
 }
 
-export async function getInactiveIncompleteConversations({ staleBefore, limit = 25 }) {
-  const { data, error } = await supabase
-    .from('conversations')
-    .select('*')
-    .neq('step', 'completed')
-    .lt('updated_at', staleBefore)
-    .order('updated_at', { ascending: true })
-    .limit(limit);
-
-  if (error) {
-    console.error('[supabase] getInactiveIncompleteConversations FAILED:', JSON.stringify(error));
-    return [];
-  }
-  return data || [];
-}
-
-export async function markRegistrationReminderSent(conversation) {
-  const tempData = {
-    ...(conversation.temp_data || {}),
-    registration_reminder_sent_at: new Date().toISOString(),
-  };
-
-  const { error } = await supabase
-    .from('conversations')
-    .update({
-      temp_data: tempData,
-      updated_at: conversation.updated_at,
-    })
-    .eq('id', conversation.id);
-
-  if (error) console.error('[supabase] markRegistrationReminderSent FAILED:', JSON.stringify(error));
-}
-
-// --- Equivalent of "Search Freelancers" node ---
 export async function findFreelancer(phone) {
   const { data, error } = await supabase
     .from('freelancers')
@@ -65,6 +32,21 @@ export async function findFreelancer(phone) {
 
   if (error) {
     console.error('findFreelancer error:', error);
+    return null;
+  }
+  return data && data.length > 0 ? data[0] : null;
+}
+
+export async function findJobRequest(phone) {
+  const { data, error } = await supabase
+    .from('job_requests')
+    .select('*')
+    .eq('phone', phone)
+    .order('id', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.error('findJobRequest error:', error);
     return null;
   }
   return data && data.length > 0 ? data[0] : null;
@@ -91,44 +73,55 @@ export async function saveConversation({ id, phone, role, step, temp_data }) {
 }
 
 // --- Equivalent of "Delete Conversations" + "Delete Freelancers" (reset command) ---
+// Full wipe: profile, job, conversation, AND any match rows tied to this phone.
 export async function resetUser(phone) {
-  // Matches reference freelancers/job_requests by phone — clear them first so
-  // the reset also works on databases without ON DELETE CASCADE.
-  await supabase.from('matches').delete().or(`freelancer_phone.eq.${phone},client_phone.eq.${phone}`);
-  await supabase.from('notifications').delete().eq('phone', phone);
-  await supabase.from('insights').delete().eq('phone', phone);
-  await supabase.from('vetting_checks').delete().eq('phone', phone);
   await supabase.from('conversations').delete().eq('phone', phone);
   await supabase.from('freelancers').delete().eq('phone', phone);
   await supabase.from('job_requests').delete().eq('phone', phone);
+
+  // Cancel any matches where this phone appears on either side
+  await supabase
+    .from('matches')
+    .update({ status: 'cancelled' })
+    .eq('freelancer_phone', phone)
+    .in('status', ['pending', 'awaiting_response', 'awaiting_other', 'connected']);
+
+  await supabase
+    .from('matches')
+    .update({ status: 'cancelled' })
+    .eq('job_phone', phone)
+    .in('status', ['pending', 'awaiting_response', 'awaiting_other', 'connected']);
 }
 
 // --- Save / upsert a completed freelancer profile ---
-// Writes every field the onboarding flow collects — matching depends on
-// skills/rate/availability being present in the permanent table.
+// Writes ALL collected fields into the `freelancers` table.
 // Uses upsert (conflict on `phone`) so re-runs are safe and don't duplicate rows.
 export async function saveFreelancerProfile(phone, data) {
+  let embedding = null;
+  try {
+    const text = buildFreelancerEmbeddingText({ phone, ...data });
+    embedding = await generateEmbedding(text);
+  } catch (embErr) {
+    console.warn('[supabase] Error generating embedding for freelancer:', embErr.message);
+  }
+
   const row = {
     phone,
     name:              data.name              || null,
-    profile_link:      data.linkedin_url      || data.cv_url || data.profile_link || null,
-    linkedin_url:      data.linkedin_url      || null,
-    github_url:        data.github_url        || null,
-    cv_url:            data.cv_url            || null,
-    support_docs:      data.support_docs      || null,
+    profile_link:      data.profile_link      || null,
     portfolio:         data.portfolio         || null,
     skills:            data.skills            || null,
     tools:             data.tools             || null,
     rate:              data.rate              || null,
     availability:      data.availability      || null,
     preferences:       data.preferences       || null,
-    working_currently: data.working_currently ?? null,
-    contact_sharing_allowed: data.contact_sharing_allowed ?? null,
     brief_description: data.brief_description || null,
-    updated_at:        new Date().toISOString(),
+    status:            'active',
+    is_available:      true,
+    ...(embedding ? { embedding } : {}),
   };
 
-  console.log('[supabase] saveFreelancerProfile — upserting row:', JSON.stringify(row));
+  console.log('[supabase] saveFreelancerProfile — upserting row (with vector embedding:', !!embedding, ')');
 
   const { data: upserted, error } = await supabase
     .from('freelancers')
@@ -146,6 +139,14 @@ export async function saveFreelancerProfile(phone, data) {
 // Writes all client-collected fields into the `job_requests` table.
 // Uses upsert (conflict on `phone`) so re-runs are safe.
 export async function saveJobRequest(phone, data) {
+  let embedding = null;
+  try {
+    const text = buildJobEmbeddingText({ phone, ...data });
+    embedding = await generateEmbedding(text);
+  } catch (embErr) {
+    console.warn('[supabase] Error generating embedding for job request:', embErr.message);
+  }
+
   const row = {
     phone,
     name:                data.name                || null,
@@ -157,12 +158,12 @@ export async function saveJobRequest(phone, data) {
     deadline:            data.deadline             || null,
     deadline_normalized: data.deadline_normalized  || null,
     is_recurring:        data.is_recurring         ?? null,
-    hiring_currently:    data.hiring_currently     ?? null,
-    contact_sharing_allowed: data.contact_sharing_allowed ?? null,
     brief_description:   data.brief_description    || null,
+    is_available:        true,
+    ...(embedding ? { embedding } : {}),
   };
 
-  console.log('[supabase] saveJobRequest — upserting row:', JSON.stringify(row));
+  console.log('[supabase] saveJobRequest — upserting row (with vector embedding:', !!embedding, ')');
 
   const { data: upserted, error } = await supabase
     .from('job_requests')
@@ -176,290 +177,328 @@ export async function saveJobRequest(phone, data) {
   }
 }
 
-// --- Reads used by the matching engine ---
-export async function findJobRequest(phone) {
-  const { data, error } = await supabase
-    .from('job_requests')
-    .select('*')
-    .eq('phone', phone)
-    .order('id', { ascending: false })
-    .limit(1);
-
-  if (error) {
-    console.error('findJobRequest error:', error);
-    return null;
-  }
-  return data && data.length > 0 ? data[0] : null;
-}
-
-export async function getAllFreelancers() {
-  const { data, error } = await supabase.from('freelancers').select('*');
-  if (error) {
-    console.error('getAllFreelancers error:', error);
-    return [];
-  }
-  return data || [];
-}
-
-export async function getAllJobRequests() {
-  const { data, error } = await supabase.from('job_requests').select('*');
-  if (error) {
-    console.error('getAllJobRequests error:', error);
-    return [];
-  }
-  return data || [];
-}
-
-// --- Writes used by the matching engine ---
-// Upserts on (freelancer_phone, client_phone) so re-running matching after a
-// profile edit refreshes scores instead of duplicating rows.
-export async function upsertMatches(rows) {
-  if (!rows || rows.length === 0) return [];
-  const { data, error } = await supabase
-    .from('matches')
-    .upsert(rows, { onConflict: 'freelancer_phone,client_phone' })
-    .select();
-  if (error) {
-    console.error('[supabase] upsertMatches FAILED:', JSON.stringify(error));
-    return [];
-  }
-  console.log(`[supabase] upsertMatches OK — ${data?.length ?? 0} row(s)`);
-  return data || [];
-}
-
-export async function getRankedMatchesForPhone(phone, role) {
-  const field = role === 'freelancer' ? 'freelancer_phone' : 'client_phone';
-  const { data, error } = await supabase
-    .from('matches')
-    .select('*')
-    .eq(field, phone)
-    .order('total_score', { ascending: false, nullsFirst: false })
-    .order('compatibility_score', { ascending: false })
-    .order('created_at', { ascending: false });
-  if (error) {
-    console.error('[supabase] getRankedMatchesForPhone FAILED:', JSON.stringify(error));
-    return [];
-  }
-  return data || [];
-}
-
-export async function findMatchById(id) {
-  const { data, error } = await supabase
-    .from('matches')
-    .select('*')
-    .eq('id', id)
-    .single();
-  if (error) {
-    console.error('[supabase] findMatchById FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data;
-}
-
-export async function updateMatchLifecycle(id, patch) {
-  const { data, error } = await supabase
-    .from('matches')
-    .update(patch)
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) {
-    console.error('[supabase] updateMatchLifecycle FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data;
-}
-
-export async function upsertMatchFeedback(row) {
-  const stamped = {
-    ...row,
-    updated_at: new Date().toISOString(),
-  };
-  const { data, error } = await supabase
-    .from('match_feedback')
-    .upsert(stamped, { onConflict: 'match_id,phone' })
-    .select()
-    .single();
-  if (error) {
-    console.error('[supabase] upsertMatchFeedback FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data;
-}
-
-export async function findPendingContactRequest({ matchId, requesterPhone, targetPhone }) {
-  const { data, error } = await supabase
-    .from('contact_requests')
-    .select('*')
-    .eq('match_id', matchId)
-    .eq('requester_phone', requesterPhone)
-    .eq('target_phone', targetPhone)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false })
-    .limit(1);
-  if (error) {
-    console.error('[supabase] findPendingContactRequest FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data && data.length > 0 ? data[0] : null;
-}
-
-export async function findLatestPendingContactApproval(targetPhone) {
-  const { data, error } = await supabase
-    .from('contact_requests')
-    .select('*')
-    .eq('target_phone', targetPhone)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false })
-    .limit(1);
-  if (error) {
-    console.error('[supabase] findLatestPendingContactApproval FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data && data.length > 0 ? data[0] : null;
-}
-
-export async function getPendingContactRequestsForTarget(targetPhone) {
-  const { data, error } = await supabase
-    .from('contact_requests')
-    .select('*')
-    .eq('target_phone', targetPhone)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-  if (error) {
-    console.error('[supabase] getPendingContactRequestsForTarget FAILED:', JSON.stringify(error));
-    return [];
-  }
-  return data || [];
-}
-
-export async function createContactRequest(row) {
-  const { data, error } = await supabase
-    .from('contact_requests')
-    .insert(row)
-    .select()
-    .single();
-  if (error) {
-    console.error('[supabase] createContactRequest FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data;
-}
-
-export async function updateContactRequestStatus(id, status) {
-  const { data, error } = await supabase
-    .from('contact_requests')
-    .update({ status, responded_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) {
-    console.error('[supabase] updateContactRequestStatus FAILED:', JSON.stringify(error));
-    return null;
-  }
-  return data;
-}
-
-export async function insertNotifications(rows) {
-  if (!rows || rows.length === 0) return;
-  const { error } = await supabase.from('notifications').insert(rows);
-  if (error) console.error('[supabase] insertNotifications FAILED:', JSON.stringify(error));
-}
-
-// Insights are a snapshot, not a log — replace the user's old rows each time
-// they're regenerated so the dashboard never shows stale duplicates.
-export async function replaceInsights(phone, rows) {
-  const { error: delError } = await supabase.from('insights').delete().eq('phone', phone);
-  if (delError) console.error('[supabase] replaceInsights delete FAILED:', JSON.stringify(delError));
-  if (!rows || rows.length === 0) return;
-  const { error } = await supabase.from('insights').insert(rows);
-  if (error) console.error('[supabase] replaceInsights insert FAILED:', JSON.stringify(error));
-}
-
-// --- Vetting checks are replaced per full run or per single artifact re-vet ---
-export async function replaceVettingChecks(phone, rows, artifact = null) {
-  let query = supabase.from('vetting_checks').delete().eq('phone', phone);
-  if (artifact) query = query.eq('artifact', artifact);
-
-  const { error: delError } = await query;
-  if (delError) console.error('[supabase] replaceVettingChecks delete FAILED:', JSON.stringify(delError));
-
-  if (!rows || rows.length === 0) return [];
-
-  const stamped = rows.map((row) => ({
-    phone,
-    artifact: row.artifact,
-    check_type: row.check_type,
-    status: row.status,
-    evidence: row.evidence || {},
-  }));
-
-  const { data, error } = await supabase
-    .from('vetting_checks')
-    .insert(stamped)
-    .select();
-
-  if (error) {
-    console.error('[supabase] replaceVettingChecks insert FAILED:', JSON.stringify(error));
-    return [];
-  }
-  return data || [];
-}
-
-export async function getVettingChecks(phone) {
-  const { data, error } = await supabase
-    .from('vetting_checks')
-    .select('*')
-    .eq('phone', phone);
-  if (error) {
-    console.error('[supabase] getVettingChecks FAILED:', JSON.stringify(error));
-    return [];
-  }
-  return data || [];
-}
-
-export async function updateFreelancerTrust(phone, { trust_score, trust_tier, trust_breakdown, vetted_at }) {
-  const row = {
-    trust_score: trust_score ?? null,
-    trust_tier: trust_tier || null,
-    trust_breakdown: trust_breakdown || null,
-    vetted_at: vetted_at || new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-
-  const { error } = await supabase
-    .from('freelancers')
-    .update(row)
-    .eq('phone', phone);
-  if (error) console.error('[supabase] updateFreelancerTrust FAILED:', JSON.stringify(error));
-}
-
 // --- Updates a single field for an already-completed freelancer ---
 export async function updateFreelancerField(phone, field, value) {
+  const updates = { [field]: value, updated_at: new Date().toISOString() };
+
+  // If updating a semantic field, recalculate the vector embedding
+  const SEMANTIC_FIELDS = new Set(['skills', 'tools', 'preferences', 'brief_description', 'name']);
+  if (SEMANTIC_FIELDS.has(field)) {
+    try {
+      const current = await findFreelancer(phone);
+      const merged = { ...(current || {}), [field]: value };
+      const embeddingText = buildFreelancerEmbeddingText(merged);
+      const embedding = await generateEmbedding(embeddingText);
+      if (embedding) {
+        updates.embedding = embedding;
+      }
+    } catch (err) {
+      console.warn('[supabase] Error regenerating embedding on field update:', err.message);
+    }
+  }
+
   const { error } = await supabase
     .from('freelancers')
-    .update({ [field]: value, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('phone', phone);
   if (error) console.error(`[supabase] updateFreelancerField (${field}) error:`, JSON.stringify(error));
 }
 
-// --- Updates a single field for an already-completed client job request ---
-// No-op (0 rows) when the client hasn't completed onboarding yet.
-export async function updateJobRequestField(phone, field, value) {
-  const { error } = await supabase
-    .from('job_requests')
-    .update({ [field]: value })
-    .eq('phone', phone);
-  if (error) console.error(`[supabase] updateJobRequestField (${field}) error:`, JSON.stringify(error));
+// --- Vector similarity search for freelancers (pgvector RPC) ---
+export async function searchFreelancersByVector(queryEmbedding, threshold = 0.3, limit = 10) {
+  if (!queryEmbedding) return [];
+  try {
+    const { data, error } = await supabase.rpc('match_freelancers', {
+      query_embedding: queryEmbedding,
+      match_threshold: threshold,
+      match_count: limit,
+    });
+
+    if (error) {
+      console.warn('[supabase] searchFreelancersByVector RPC error (falling back to rule-based):', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.warn('[supabase] searchFreelancersByVector exception:', err.message);
+    return [];
+  }
 }
 
-// --- Removes a user's matches (either side) ---
-// Used when someone flips hiring_currently / working_currently to "no", so
-// they stop being displayed until they opt back in.
-export async function deleteMatchesForPhone(phone) {
+// --- Vector similarity search for jobs (pgvector RPC) ---
+export async function searchJobsByVector(queryEmbedding, threshold = 0.3, limit = 10) {
+  if (!queryEmbedding) return [];
+  try {
+    const { data, error } = await supabase.rpc('match_jobs', {
+      query_embedding: queryEmbedding,
+      match_threshold: threshold,
+      match_count: limit,
+    });
+
+    if (error) {
+      console.warn('[supabase] searchJobsByVector RPC error (falling back to rule-based):', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.warn('[supabase] searchJobsByVector exception:', err.message);
+    return [];
+  }
+}
+
+// --- Fetch active freelancers (status = 'active') for matching ---
+export async function getActiveFreelancers() {
+  const { data, error } = await supabase
+    .from('freelancers')
+    .select('*')
+    .eq('status', 'active')
+    .eq('is_available', true);
+
+  if (error) {
+    console.error('[supabase] getActiveFreelancers error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Fetch active job requests (status = 'active') for matching ---
+export async function getActiveJobRequests() {
+  const { data, error } = await supabase
+    .from('job_requests')
+    .select('*')
+    .eq('status', 'active')
+    .eq('is_available', true);
+
+  if (error) {
+    console.error('[supabase] getActiveJobRequests error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Fetch declined pairs to exclude from matching ---
+export async function getDeclinedPairs() {
+  const { data, error } = await supabase
+    .from('declined_pairs')
+    .select('freelancer_phone, job_phone, job_description_hash');
+
+  if (error) {
+    console.error('[supabase] getDeclinedPairs error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Insert a single match result (new schema with batch/rank) ---
+export async function insertMatch(row) {
+  const { data, error } = await supabase
+    .from('matches')
+    .insert(row)
+    .select();
+
+  if (error) {
+    console.error('[supabase] insertMatch FAILED:', JSON.stringify(error));
+    return null;
+  }
+  console.log('[supabase] insertMatch OK — id:', data?.[0]?.id);
+  return data?.[0] || null;
+}
+
+// --- Update match status ---
+export async function updateMatchStatus(matchId, updates) {
   const { error } = await supabase
     .from('matches')
-    .delete()
-    .or(`freelancer_phone.eq.${phone},client_phone.eq.${phone}`);
-  if (error) console.error('[supabase] deleteMatchesForPhone error:', JSON.stringify(error));
+    .update(updates)
+    .eq('id', matchId);
+
+  if (error) {
+    console.error('[supabase] updateMatchStatus FAILED:', JSON.stringify(error));
+  }
 }
+
+// --- Get matches by batch_id ---
+export async function getMatchesByBatch(batchId) {
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .eq('batch_id', batchId)
+    .order('rank', { ascending: true });
+
+  if (error) {
+    console.error('[supabase] getMatchesByBatch error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Get active/pending matches for a phone (any role) ---
+export async function getActiveMatchesForPhone(phone) {
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .or(`job_phone.eq.${phone},freelancer_phone.eq.${phone}`)
+    .in('status', ['pending', 'awaiting_response', 'accepted', 'awaiting_other']);
+
+  if (error) {
+    console.error('[supabase] getActiveMatchesForPhone error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Get all live (non-declined) matches for a phone (any role) ---
+// Includes connected matches, unlike getActiveMatchesForPhone.
+export async function getAllLiveMatchesForPhone(phone) {
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .or(`job_phone.eq.${phone},freelancer_phone.eq.${phone}`)
+    .in('status', ['pending', 'awaiting_response', 'awaiting_other', 'connected'])
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('[supabase] getAllLiveMatchesForPhone error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Update user status (freelancer or job_request) ---
+export async function updateUserStatus(phone, role, status) {
+  const table = role === 'freelancer' ? 'freelancers' : 'job_requests';
+  const { error } = await supabase
+    .from(table)
+    .update({ status })
+    .eq('phone', phone);
+
+  if (error) {
+    console.error(`[supabase] updateUserStatus (${table}) FAILED:`, JSON.stringify(error));
+  } else {
+    console.log(`[supabase] updateUserStatus — ${phone} → ${status}`);
+  }
+}
+
+// --- Set is_available flag for a freelancer or job_request ---
+export async function setAvailability(phone, role, isAvailable) {
+  const table = role === 'freelancer' ? 'freelancers' : 'job_requests';
+  const { error } = await supabase
+    .from(table)
+    .update({ is_available: isAvailable, updated_at: new Date().toISOString() })
+    .eq('phone', phone);
+
+  if (error) {
+    console.error(`[supabase] setAvailability (${table}, ${phone}) FAILED:`, JSON.stringify(error));
+  } else {
+    console.log(`[supabase] setAvailability — ${phone} (${table}) → ${isAvailable}`);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  REVIEWS & REPUTATION SYSTEM
+// ═════════════════════════════════════════════════════════════════════════════
+
+// --- Save a review and update reviewee reputation score ---
+export async function saveReview({
+  matchId,
+  reviewerPhone,
+  reviewerRole,
+  revieweePhone,
+  revieweeRole,
+  rating,
+  feedbackNote,
+  projectTitle,
+}) {
+  const row = {
+    match_id: matchId || null,
+    reviewer_phone: reviewerPhone,
+    reviewer_role: reviewerRole,
+    reviewee_phone: revieweePhone,
+    reviewee_role: revieweeRole,
+    rating: Math.max(1, Math.min(5, parseInt(rating, 10) || 5)),
+    feedback_note: feedbackNote || null,
+    project_title: projectTitle || null,
+  };
+
+  const { data, error } = await supabase.from('reviews').insert(row).select();
+  if (error) {
+    console.error('[supabase] saveReview FAILED:', JSON.stringify(error));
+    return null;
+  }
+
+  // Update match review status
+  if (matchId) {
+    const updateField = reviewerRole === 'client' ? 'client_reviewed' : 'freelancer_reviewed';
+    await supabase.from('matches').update({ [updateField]: true }).eq('id', matchId);
+  }
+
+  // Recalculate average rating & review count for the reviewee
+  const { data: allReviews } = await supabase
+    .from('reviews')
+    .select('rating')
+    .eq('reviewee_phone', revieweePhone);
+
+  if (allReviews && allReviews.length > 0) {
+    const count = allReviews.length;
+    const sum = allReviews.reduce((acc, r) => acc + r.rating, 0);
+    const avg = Math.round((sum / count) * 10) / 10;
+
+    const targetTable = revieweeRole === 'freelancer' ? 'freelancers' : 'job_requests';
+    await supabase
+      .from(targetTable)
+      .update({ rating_avg: avg, review_count: count })
+      .eq('phone', revieweePhone);
+
+    console.log(`[supabase] Updated reputation for ${revieweePhone} (${targetTable}): ${avg}⭐ (${count} reviews)`);
+  }
+
+  return data?.[0] || null;
+}
+
+// --- Get reputation summary for a user ---
+export async function getReputation(phone, role = 'freelancer') {
+  const table = role === 'freelancer' ? 'freelancers' : 'job_requests';
+  const { data: user } = await supabase
+    .from(table)
+    .select('rating_avg, review_count')
+    .eq('phone', phone)
+    .single();
+
+  const { data: recentReviews } = await supabase
+    .from('reviews')
+    .select('*')
+    .eq('reviewee_phone', phone)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  return {
+    rating_avg: user?.rating_avg || 0,
+    review_count: user?.review_count || 0,
+    recent_reviews: recentReviews || [],
+  };
+}
+
+// --- Fetch connected matches that are due for feedback ---
+export async function getMatchesDueForFeedback() {
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .eq('status', 'connected')
+    .is('feedback_requested_at', null);
+
+  if (error) {
+    console.error('[supabase] getMatchesDueForFeedback error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Mark match as feedback requested ---
+export async function markFeedbackRequested(matchId) {
+  const { error } = await supabase
+    .from('matches')
+    .update({ feedback_requested_at: new Date().toISOString() })
+    .eq('id', matchId);
+
+  if (error) console.error(`[supabase] markFeedbackRequested (${matchId}) error:`, JSON.stringify(error));
+}
+
