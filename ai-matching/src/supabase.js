@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
+import { generateEmbedding, buildFreelancerEmbeddingText, buildJobEmbeddingText } from './embeddings.js';
 
 // Service role key bypasses RLS entirely - same as the n8n Supabase credential did.
 export const supabase = createClient(config.supabase.url, config.supabase.serviceRoleKey);
@@ -96,6 +97,14 @@ export async function resetUser(phone) {
 // Writes ALL collected fields into the `freelancers` table.
 // Uses upsert (conflict on `phone`) so re-runs are safe and don't duplicate rows.
 export async function saveFreelancerProfile(phone, data) {
+  let embedding = null;
+  try {
+    const text = buildFreelancerEmbeddingText({ phone, ...data });
+    embedding = await generateEmbedding(text);
+  } catch (embErr) {
+    console.warn('[supabase] Error generating embedding for freelancer:', embErr.message);
+  }
+
   const row = {
     phone,
     name:              data.name              || null,
@@ -109,9 +118,10 @@ export async function saveFreelancerProfile(phone, data) {
     brief_description: data.brief_description || null,
     status:            'active',
     is_available:      true,
+    ...(embedding ? { embedding } : {}),
   };
 
-  console.log('[supabase] saveFreelancerProfile — upserting row:', JSON.stringify(row));
+  console.log('[supabase] saveFreelancerProfile — upserting row (with vector embedding:', !!embedding, ')');
 
   const { data: upserted, error } = await supabase
     .from('freelancers')
@@ -129,6 +139,14 @@ export async function saveFreelancerProfile(phone, data) {
 // Writes all client-collected fields into the `job_requests` table.
 // Uses upsert (conflict on `phone`) so re-runs are safe.
 export async function saveJobRequest(phone, data) {
+  let embedding = null;
+  try {
+    const text = buildJobEmbeddingText({ phone, ...data });
+    embedding = await generateEmbedding(text);
+  } catch (embErr) {
+    console.warn('[supabase] Error generating embedding for job request:', embErr.message);
+  }
+
   const row = {
     phone,
     name:                data.name                || null,
@@ -142,9 +160,10 @@ export async function saveJobRequest(phone, data) {
     is_recurring:        data.is_recurring         ?? null,
     brief_description:   data.brief_description    || null,
     is_available:        true,
+    ...(embedding ? { embedding } : {}),
   };
 
-  console.log('[supabase] saveJobRequest — upserting row:', JSON.stringify(row));
+  console.log('[supabase] saveJobRequest — upserting row (with vector embedding:', !!embedding, ')');
 
   const { data: upserted, error } = await supabase
     .from('job_requests')
@@ -160,11 +179,71 @@ export async function saveJobRequest(phone, data) {
 
 // --- Updates a single field for an already-completed freelancer ---
 export async function updateFreelancerField(phone, field, value) {
+  const updates = { [field]: value, updated_at: new Date().toISOString() };
+
+  // If updating a semantic field, recalculate the vector embedding
+  const SEMANTIC_FIELDS = new Set(['skills', 'tools', 'preferences', 'brief_description', 'name']);
+  if (SEMANTIC_FIELDS.has(field)) {
+    try {
+      const current = await findFreelancer(phone);
+      const merged = { ...(current || {}), [field]: value };
+      const embeddingText = buildFreelancerEmbeddingText(merged);
+      const embedding = await generateEmbedding(embeddingText);
+      if (embedding) {
+        updates.embedding = embedding;
+      }
+    } catch (err) {
+      console.warn('[supabase] Error regenerating embedding on field update:', err.message);
+    }
+  }
+
   const { error } = await supabase
     .from('freelancers')
-    .update({ [field]: value, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('phone', phone);
   if (error) console.error(`[supabase] updateFreelancerField (${field}) error:`, JSON.stringify(error));
+}
+
+// --- Vector similarity search for freelancers (pgvector RPC) ---
+export async function searchFreelancersByVector(queryEmbedding, threshold = 0.3, limit = 10) {
+  if (!queryEmbedding) return [];
+  try {
+    const { data, error } = await supabase.rpc('match_freelancers', {
+      query_embedding: queryEmbedding,
+      match_threshold: threshold,
+      match_count: limit,
+    });
+
+    if (error) {
+      console.warn('[supabase] searchFreelancersByVector RPC error (falling back to rule-based):', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.warn('[supabase] searchFreelancersByVector exception:', err.message);
+    return [];
+  }
+}
+
+// --- Vector similarity search for jobs (pgvector RPC) ---
+export async function searchJobsByVector(queryEmbedding, threshold = 0.3, limit = 10) {
+  if (!queryEmbedding) return [];
+  try {
+    const { data, error } = await supabase.rpc('match_jobs', {
+      query_embedding: queryEmbedding,
+      match_threshold: threshold,
+      match_count: limit,
+    });
+
+    if (error) {
+      console.warn('[supabase] searchJobsByVector RPC error (falling back to rule-based):', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.warn('[supabase] searchJobsByVector exception:', err.message);
+    return [];
+  }
 }
 
 // --- Fetch active freelancers (status = 'active') for matching ---

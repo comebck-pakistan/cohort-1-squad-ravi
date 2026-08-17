@@ -27,10 +27,17 @@ export const config = {
     model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   },
 
+  huggingface: {
+    apiKey: process.env.HUGGINGFACE_API_KEY || '',
+    model: process.env.HUGGINGFACE_MODEL || 'sentence-transformers/all-MiniLM-L6-v2',
+  },
+
   matching: {
-    ruleWeight: 0.4,
-    aiWeight:   0.6,
-    threshold:  50,
-    maxMatches: 3,
+    ruleWeight:      0.4,
+    aiWeight:        0.6,
+    threshold:       50,
+    maxMatches:      3,
+    vectorThreshold: 0.3,
+    vectorTopK:      10,
   },
 };

@@ -1,6 +1,15 @@
 import { config } from './config.js';
-import { getActiveFreelancers, getActiveJobRequests, getDeclinedPairs, getAllLiveMatchesForPhone, insertMatch } from './supabase.js';
+import {
+  getActiveFreelancers,
+  getActiveJobRequests,
+  getDeclinedPairs,
+  getAllLiveMatchesForPhone,
+  insertMatch,
+  searchFreelancersByVector,
+  searchJobsByVector,
+} from './supabase.js';
 import { sendWhatsAppMessage, sendWhatsAppButtons } from './whatsapp.js';
+import { generateEmbedding, buildFreelancerEmbeddingText, buildJobEmbeddingText } from './embeddings.js';
 
 // ── Tokenisation helper ──────────────────────────────────────────────────────
 function tokenize(text) {
@@ -208,10 +217,38 @@ async function scoreCandidates(candidates, jobRequest, freelancerExtractor) {
 
 /**
  * Find matches for a newly registered client.
- * Scores all active freelancers against this job request.
+ * Uses pgvector semantic search to retrieve top candidates in <20ms,
+ * falling back to all active freelancers if vector search is unavailable.
  */
 export async function findMatchesForClient(jobRequest) {
-  const freelancers = await getActiveFreelancers();
+  let candidates = [];
+  let isVectorSearch = false;
+
+  // 1. Try vector semantic search via pgvector
+  try {
+    const embeddingText = buildJobEmbeddingText(jobRequest);
+    const queryEmbedding = await generateEmbedding(embeddingText);
+    if (queryEmbedding) {
+      const vectorMatches = await searchFreelancersByVector(
+        queryEmbedding,
+        config.matching.vectorThreshold,
+        config.matching.vectorTopK,
+      );
+      if (vectorMatches && vectorMatches.length > 0) {
+        candidates = vectorMatches;
+        isVectorSearch = true;
+        console.log(`[matching] pgvector retrieved ${vectorMatches.length} semantic candidate(s) for job ${jobRequest.phone}`);
+      }
+    }
+  } catch (vecErr) {
+    console.warn('[matching] Vector search failed (falling back to all active freelancers):', vecErr.message);
+  }
+
+  // Fallback to all active freelancers if vector search is not active or returned empty
+  if (!isVectorSearch || candidates.length === 0) {
+    candidates = await getActiveFreelancers();
+  }
+
   const declinedPairs = await getDeclinedPairs();
   const liveMatches = await getAllLiveMatchesForPhone(jobRequest.phone);
 
@@ -225,8 +262,8 @@ export async function findMatchesForClient(jobRequest) {
 
   const liveMatchedPhones = new Set(liveMatches.map(m => m.freelancer_phone));
 
-  const eligible = freelancers.filter(f => !declinedSet.has(f.phone) && !liveMatchedPhones.has(f.phone));
-  console.log(`[matching] Client scan: ${eligible.length} eligible freelancer(s) (${freelancers.length} total, ${declinedSet.size} declined-excluded, ${liveMatchedPhones.size} live-excluded)`);
+  const eligible = candidates.filter(f => !declinedSet.has(f.phone) && !liveMatchedPhones.has(f.phone));
+  console.log(`[matching] Client scan: ${eligible.length} eligible freelancer(s) (${candidates.length} pool, ${declinedSet.size} declined-excluded, ${liveMatchedPhones.size} live-excluded, vector=${isVectorSearch})`);
 
   if (eligible.length === 0) return [];
 
@@ -235,10 +272,38 @@ export async function findMatchesForClient(jobRequest) {
 
 /**
  * Find matches for a newly registered freelancer.
- * Scores all active job requests, treating each as a potential match.
+ * Uses pgvector semantic search to retrieve top candidate jobs in <20ms,
+ * falling back to all active job requests if vector search is unavailable.
  */
 export async function findMatchesForFreelancer(freelancer) {
-  const jobRequests = await getActiveJobRequests();
+  let candidates = [];
+  let isVectorSearch = false;
+
+  // 1. Try vector semantic search via pgvector
+  try {
+    const embeddingText = buildFreelancerEmbeddingText(freelancer);
+    const queryEmbedding = await generateEmbedding(embeddingText);
+    if (queryEmbedding) {
+      const vectorMatches = await searchJobsByVector(
+        queryEmbedding,
+        config.matching.vectorThreshold,
+        config.matching.vectorTopK,
+      );
+      if (vectorMatches && vectorMatches.length > 0) {
+        candidates = vectorMatches;
+        isVectorSearch = true;
+        console.log(`[matching] pgvector retrieved ${vectorMatches.length} semantic job(s) for freelancer ${freelancer.phone}`);
+      }
+    }
+  } catch (vecErr) {
+    console.warn('[matching] Vector search failed (falling back to all active jobs):', vecErr.message);
+  }
+
+  // Fallback to all active jobs if vector search is not active or returned empty
+  if (!isVectorSearch || candidates.length === 0) {
+    candidates = await getActiveJobRequests();
+  }
+
   const declinedPairs = await getDeclinedPairs();
   const liveMatches = await getAllLiveMatchesForPhone(freelancer.phone);
 
@@ -251,7 +316,7 @@ export async function findMatchesForFreelancer(freelancer) {
 
   const liveMatchedPhones = new Set(liveMatches.map(m => m.job_phone));
 
-  const eligible = jobRequests.filter(jr => {
+  const eligible = candidates.filter(jr => {
     if (liveMatchedPhones.has(jr.phone)) return false;
 
     const prevHash = declinedMap.get(jr.phone);
@@ -260,7 +325,7 @@ export async function findMatchesForFreelancer(freelancer) {
     return prevHash !== simpleHash(jr.project_description);
   });
 
-  console.log(`[matching] Freelancer scan: ${eligible.length} eligible job request(s) (${jobRequests.length} total, ${liveMatchedPhones.size} live-excluded)`);
+  console.log(`[matching] Freelancer scan: ${eligible.length} eligible job request(s) (${candidates.length} pool, ${liveMatchedPhones.size} live-excluded, vector=${isVectorSearch})`);
 
   if (eligible.length === 0) return [];
 

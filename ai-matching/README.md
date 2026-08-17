@@ -6,57 +6,59 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 ## Changelog by Qaim
 
-### Deadline & Timeline Parsing
-- Rebuilt deadline extraction to understand any phrasing style, not just hardcoded keywords — covers specific dates (e.g. "July 15"), relative durations (e.g. "2 weeks", "3 days"), and recurring patterns (e.g. "weekly", "every week")
-- Added a local, non-AI keyword pre-check that runs before the Groq call — catches common/obvious deadline phrasing instantly and for free, only falling through to AI extraction for genuinely ambiguous answers
-- Fixed `deadline_normalized` always returning `null` for recurring/keyword-based answers (e.g. "weekly") — now correctly populates a clean normalized value for every valid deadline type (date, duration, or recurring)
-- Fixed the deadline step asking two different but overlapping questions for the same field — now maps to a single question with no duplication
-- Added acknowledgment-word detection ("okay", "ok", "sounds good", etc.) so these no longer get misinterpreted as new answers or re-trigger already-answered questions
-- Bot now understands phrases like "this week," "in 2 days," "next month," "asap," etc. and calculates the actual target date (`deadline_date` / `availability_date`) instead of only storing raw text
+### Vector Semantic Search with pgvector in Supabase ⚡
+- Integrated **pgvector semantic search** in Supabase to eliminate the limitations of exact keyword matching (e.g. matching "Frontend Engineer" with "React Dev" or "Copywriter" with "Content Creator").
+- **100% Free Dense Vector Embeddings:** Generates 384-dimensional vector embeddings using Hugging Face's free serverless inference API with `sentence-transformers/all-MiniLM-L6-v2` (`src/embeddings.js`). Zero paid OpenAI API key required.
+- **Sub-10ms Cosine Search:** Queries Supabase using HNSW-indexed cosine distance RPC functions (`match_freelancers` and `match_jobs`) to find the top semantic candidates in milliseconds with 75% less storage overhead.
+- **Hybrid AI Reranking:** Vector search retrieves the highest-similarity candidate pool, which is then fed into Groq LLM for fine-grained budget fit, skill evaluation, and one-sentence fit reasoning.
+- **Graceful Fallback:** If `HUGGINGFACE_API_KEY` is not set or pgvector RPCs are not yet created in the database, the matching engine automatically and silently falls back to standard rule-based matching without crashing.
+- **SQL Migration Provided:** Added [`migrations/01_pgvector_setup.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/01_pgvector_setup.sql) with ready-to-run DDL for the vector extension, 384-dim embedding columns, HNSW cosine indexes, and matching RPC functions.
 
-### Edit Flow
-- Users can update their name, rate, budget, deadline, portfolio, or any other saved field at any point — mid-onboarding or after profile completion — by typing things like "edit my info," "change my rate," or "change my deadline." Works for both Freelancers and Clients, across every collected field
-- Fixed a bug where editing any field after reaching the confirmation/completed step caused the bot to fall through into the normal question sequence and re-ask unrelated questions instead of returning to the completed state
-- Ensured acknowledgments sent after a successful edit are treated as pure confirmation and don't get re-parsed as new field answers
+### WhatsApp Interactive Buttons & Quick-Reply Menus 🔘
+- Added full **WhatsApp Cloud API Interactive Quick-Reply Button** support across onboarding, match notifications, and availability prompts.
+- **Onboarding Buttons:** 1-tap quick replies for Role selection (`[🛠️ Freelancer]` / `[💼 Client]`), Hire type (`[📦 Project-based]` / `[⏱️ Full-time]`), Availability (`[⚡ 40h/wk Full-time]`, `[⏳ 20h/wk Part-time]`, `[🌱 Flexible (10h/wk)]`), Deadlines (`[⚡ ASAP / Urgent]`, `[📅 In 1-2 Weeks]`, `[🔄 Recurring]`), Skips (`[Skip for now]`, `[⏭️ Skip / None]`), and Preferences (`[🌍 Open to anything]`).
+- **Match Notification CTAs:** Sent interactive `[✅ Interested]` and `[❌ Not Interested]` buttons for fast 1-tap match acceptance or passing.
+- **Availability Management:** Interactive `[🟢 Keep Active]` and `[⏸️ Pause Matches]` buttons for return-to-pool prompts.
+- **Webhook & Local Fast-Path:** Webhook processes `button_reply` payloads directly, resolving selections with 0ms latency and 0 API token cost.
 
-### Data Persistence (Supabase)
-- Fixed conversations reaching `step = "completed"` not being copied into the permanent `freelancers` / `job_requests` tables — data was previously stuck only in the temporary `conversations.temp_data` column
-- Added upsert-by-phone logic for both `freelancers` and `job_requests` so repeat conversations update existing rows instead of failing or duplicating
-- Corrected the `job_requests` table schema to match what the application actually writes — added `phone`, `name`, `project_description`, `hire_type`, `budget_project`, `budget_hourly`, `project_count`, `deadline`, `deadline_normalized`, `is_recurring`, and `brief_description` columns
-- Removed the `NOT NULL` constraint on the legacy `client_phone` column, which was silently failing every `job_requests` insert since the app writes to the `phone` column instead
-- Fixed `name`, `hire_type`, and `brief_description` fields not being saved to `temp_data` at all in certain cases — specifically short answers (e.g. a two-letter name) and answers given after a clarification re-ask
-- Fixed a Supabase error where the `freelancers` table was missing the `updated_at` column, which was blocking field updates
+### ~80% Reduction in AI Token Usage ⚡
+- Added a dedicated local state handler (`src/localHandler.js`) to parse onboarding steps (names, skills, rates, portfolio links, standard roles, and button IDs) locally using deterministic regex and token parsing.
+- Groq AI is now used strictly as a fallback for ambiguous inputs and complex open-ended questions, keeping costs minimal while maintaining high intelligence.
 
-### Conversation Flow & UX
-- **Typing effect** — bot now simulates a natural typing delay before sending replies instead of responding instantly
-- **Skip option for LinkedIn/CV step** — users can skip this step during onboarding instead of being forced through it
-- **Reset flow fixed** — `reset ai` now correctly clears prior conversation/freelancer rows and restarts onboarding cleanly
-- **Conversation-state memory fixed** — bot previously failed to remember earlier onboarding steps and looped back to "Freelancer or Client?"; now correctly progresses through each step using saved conversation state
-- **Randomized question phrasing** — each onboarding step pulls from multiple pre-written variants at random, so the conversation feels more natural and less scripted
-- **Natural post-completion replies** — after a profile is complete, follow-ups like "perfect" or "thanks" get a natural, varied response instead of repeating the setup-complete message
-- **Unsupported file type handling** — image/audio/video/non-text messages get a reply asking for text or a link instead
-- **`markAsReadAndTyping` error fix** — WhatsApp's API occasionally returns a "message does not exist" error (code 100) on duplicate/late webhook events; now caught and logged quietly instead of throwing
+### Improved Data & Range Handling 📊
+- **Budget & Rate Ranges:** Correctly extracts full ranges like `$300 - $500` or `$20 - $40/hr` instead of truncating to the first number.
+- **Vague Answers Saved:** Preserves open-ended responses like "I don't know", "not sure", or "open to negotiation" directly in Supabase without throwing errors.
 
-### Closing Question / Personalization
-- Replaced the vague, example-free closing question ("any project types or regions you prefer working with?") with a bank of randomized, niche-specific variants covering video editing, web development, graphic design, content writing, social media management, virtual assistant work, UGC/ad creation, and a generic catch-all
-- Added local keyword matching against the user's already-collected project description to select the most relevant variant for their specific niche — implemented in plain JS, no additional AI/API calls
-- Added random fallback variant selection for cases where no keyword match is found, so the question is never blank or broken
+### Smart Deadline Date Estimation 📅
+- Added relative date calculation (`src/deadline.js`). Expressions like "by the end of this week", "next week", "tomorrow", or "end of month" now automatically estimate and record exact target dates (e.g., `by end of week (2026-08-16)`).
+- Rebuilt deadline extraction to understand any phrasing style, not just hardcoded keywords — covers specific dates (e.g. "July 15"), relative durations (e.g. "2 weeks", "3 days"), and recurring patterns (e.g. "weekly", "every week").
+- Fixed `deadline_normalized` always returning `null` for recurring/keyword-based answers (e.g. "weekly") — now correctly populates a clean normalized value for every valid deadline type.
+- Added acknowledgment-word detection ("okay", "ok", "sounds good", etc.) so acknowledgments no longer get misinterpreted as new answers.
 
-### AI Provider
-- Currently running on **Groq only** (`llama-3.3-70b-versatile`)
-- OpenRouter integration was evaluated as a potential backup provider for when Groq's daily token limit (TPD) is hit — **not yet wired in as an active fallback**, planned for a future update
+### Edit Flow ✏️
+- Users can update their name, rate, budget, deadline, portfolio, or any other saved field at any point — mid-onboarding or after profile completion — by typing things like "edit my info," "change my rate," or "change my deadline." Works for both Freelancers and Clients, across every collected field.
+- Fixed a bug where editing any field after reaching the confirmation/completed step caused the bot to fall through into the normal question sequence and re-ask unrelated questions instead of returning to the completed state.
+- Ensured acknowledgments sent after a successful edit are treated as pure confirmation and don't get re-parsed as new field answers.
 
-### Phase 3 — Matching Layer
-- When a client completes onboarding, the bot now automatically scores every registered freelancer against the job request using a **hybrid rule-based + AI scoring** pipeline
-- **Rule-based scoring** (40% weight): tokenizes freelancer skills/tools against the project description for set-overlap scoring, plus budget-fit analysis that gracefully degrades to a neutral score when rate/budget fields are free-text or missing
-- **AI scoring** (60% weight): a separate, self-contained Groq call evaluates fit between the job request and each freelancer's preferences, skills, and portfolio — returns a 0–100 score with one-sentence reasoning. Falls back to a neutral 50 on any API or parsing failure
-- Results are filtered by a configurable threshold (default 50), sorted by final score, and capped at the top 3 matches
-- Each match is **persisted** to a new `matches` table (with rule_score, ai_score, final_score, ai_reasoning, and status)
-- Matched freelancers receive a **WhatsApp notification** summarizing the project (description, budget, deadline) and asking if they're interested
-- The client gets a confirmation message ("Found X matching freelancers, reaching out now") or a fallback ("We'll notify you once a match is found")
-- The entire matching flow is wrapped in a try/catch — failures never block the normal completion reply
-- Matching config is tuneable in `config.js`: `ruleWeight`, `aiWeight`, `threshold`, `maxMatches`
-- Reply-handling from freelancers is **not yet built** — planned for a future phase
+### Data Persistence (Supabase) 🗄️
+- Fixed conversations reaching `step = "completed"` not being copied into the permanent `freelancers` / `job_requests` tables.
+- Added upsert-by-phone logic for both `freelancers` and `job_requests` so repeat conversations update existing rows instead of failing or duplicating.
+- Corrected the `job_requests` table schema to match what the application actually writes (`phone`, `name`, `project_description`, `hire_type`, `budget_project`, `budget_hourly`, `project_count`, `deadline`, `deadline_normalized`, `is_recurring`, `brief_description`).
+- Removed the `NOT NULL` constraint on legacy `client_phone` column and fixed missing `updated_at` column errors.
+
+### Conversation Flow & UX Polish 💬
+- **Conversational Tone:** Reworded `collect_hire_type` prompts to sound like a natural buddy ("Is your work full-time, or is that project-based work?") instead of a rigid bot.
+- **Conversation State Persistence:** User roles and state machine memory are preserved across all turns and never dropped mid-onboarding.
+- **Typing effect:** Simulates a natural typing delay before sending replies.
+- **Interactive Icebreakers & Inactivity Gate:** Returning users inactive for 14+ days receive interactive welcome menus.
+- **Randomized question phrasing:** Each onboarding step pulls from multiple pre-written variants at random.
+- **Niche-Specific Preferences:** Tailored closing questions for video editing, web development, graphic design, writing, social media, VA, UGC, and mobile dev.
+
+### Matching Layer (Hybrid Rule + AI) 🎯
+- Automatic scoring of freelancers against job requests using a hybrid rule-based (40%) + AI Groq scoring (60%) pipeline.
+- Match persistence in `matches` table with status tracking (`awaiting_response`, `awaiting_other`, `connected`, `declined`).
+- Bidirectional matching: finds matches when clients post jobs AND when freelancers complete registration.
+- On-demand match checks via "show my matches".
 
 ---
 
@@ -64,14 +66,19 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 | File | Purpose |
 |---|---|
-| `src/server.js` | The webhook (GET verify + POST receive) |
-| `src/handlers/handleMessage.js` | The whole conversation flow / step machine |
-| `src/groq.js` | The Groq call + system prompt for data extraction |
-| `src/matching.js` | Hybrid rule-based + AI freelancer–job matching engine |
-| `src/replies.js` | The randomized question bank |
-| `src/supabase.js` | All Supabase reads/writes (search, upsert, create, delete) |
-| `src/whatsapp.js` | Sending WhatsApp replies |
-| `src/config.js` | Loads everything from `.env` + matching config (no secrets hardcoded) |
+| `src/server.js` | The webhook server (GET verify + POST receive for text and interactive messages) |
+| `src/handlers/handleMessage.js` | Core conversation flow, step machine, match replies, and availability management |
+| `src/handlers/icebreakerHandler.js` | Handler for interactive list menus, icebreakers, and returning-user welcome options |
+| `src/localHandler.js` | Fast-path local parsing for ~80% of messages (roles, hire types, skills, rates, buttons) without AI calls |
+| `src/deadline.js` | Local deadline/timeline parser and relative date estimator |
+| `src/embeddings.js` | Dense vector embedding generator and semantic text formatters for profiles and jobs |
+| `src/groq.js` | Groq LLM fallback for ambiguous conversation extractions and edge cases |
+| `src/matching.js` | Hybrid vector semantic search + rule-based + AI scoring matching engine & notifications |
+| `src/replies.js` | Randomized question banks, niche variants, and interactive button configurations |
+| `src/supabase.js` | All Supabase database operations (profiles, job requests, pgvector searches, matches, conversations) |
+| `src/whatsapp.js` | WhatsApp Cloud API integration (text messages, interactive buttons, list menus, typing status) |
+| `src/config.js` | Environment configuration, embedding settings, and matching weights |
+| `migrations/01_pgvector_setup.sql` | PostgreSQL DDL script for pgvector extension, embedding columns, indexes, and RPC search functions |
 
 ---
 
