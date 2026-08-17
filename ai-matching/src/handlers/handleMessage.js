@@ -32,6 +32,7 @@ import {
 import { sendWhatsAppMessage, sendWhatsAppButtons, sendWelcomeInteractive } from '../whatsapp.js';
 import { isAckOnly, parseDeadlineLocally, ensureDeadlineNormalized } from '../deadline.js';
 import { tryHandleLocally } from '../localHandler.js';
+import { parsePulseSelection, updateFreelancerPulseStatus } from '../pulse.js';
 
 import { handleIcebreakerReply } from './icebreakerHandler.js';
 
@@ -340,6 +341,14 @@ export async function handleIncomingMessage({ phone, messageText }) {
   // --- 1.2 POST-PROJECT FEEDBACK & RATINGS ---
   const feedbackHandled = await handleFeedbackSubmission({ phone, messageText, conversation });
   if (feedbackHandled) {
+    return;
+  }
+
+  // --- 1.3 WEEKLY AVAILABILITY PULSE REPLIES ---
+  const pulseMatch = parsePulseSelection(messageText);
+  if (pulseMatch) {
+    await updateFreelancerPulseStatus(phone, pulseMatch);
+    await sendWhatsAppMessage(phone, pulseMatch.replyMessage);
     return;
   }
 

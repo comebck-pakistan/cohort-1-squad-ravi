@@ -6,6 +6,16 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 ## Changelog by Qaim
 
+### Weekly "Availability Pulse" Check-In 🟢🟡🔴
+- **Automated Weekly Availability Pulse:** Pings active freelancers once a week with a 1-tap WhatsApp capacity check to keep match pools fresh and eliminate ghosting (`src/pulse.js`).
+- **Interactive 1-Tap Capacity Buttons:**
+  - `[🟢 Available Now]`: Marks profile active, prioritizing them for new client opportunities.
+  - `[🟡 Limited Hours]`: Keeps them open for flexible or part-time work with fine-tuned match weighting.
+  - `[🔴 Booked / Pause]`: Safely pauses new match notifications so freelancers can focus on current client work without spam.
+- **Fast-Path Zero-Token Updates:** Webhook and local message handlers parse pulse button IDs and natural text ("i am available", "pause matches") in 0ms with 0 Groq AI token cost.
+- **Matching Engine Boost:** Matching algorithm gives active capacity preference (`available_now`) to ensure clients get fast replies.
+- **Automated Background Scanner:** Added [`migrations/03_availability_pulse.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/03_availability_pulse.sql), a 12-hour background scan interval, and an on-demand trigger endpoint (`ALL /api/check-pulse`).
+
 ### Project Feedback & Verified Reputation Score ⭐
 - **Automated Post-Project Feedback Loop:** When a project's deadline passes, the bot scans connected matches and automatically triggers an interactive WhatsApp review prompt to both Client and Freelancer (`src/feedback.js`).
 - **Interactive 1–5 ⭐ Rating Buttons:** Users can submit verified ratings using 1-tap buttons (`[⭐⭐⭐⭐⭐ 5/5]`, `[⭐⭐⭐⭐ 4/5]`, `[⭐ 3 or below]`) or plain text (`1` to `5`).
@@ -81,6 +91,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 | `src/deadline.js` | Local deadline/timeline parser and relative date estimator |
 | `src/embeddings.js` | Dense vector embedding generator and semantic text formatters for profiles and jobs |
 | `src/feedback.js` | Automated post-deadline feedback trigger scanner and interactive rating prompts |
+| `src/pulse.js` | Automated weekly availability pulse scanner and 1-tap capacity management |
 | `src/groq.js` | Groq LLM fallback for ambiguous conversation extractions and edge cases |
 | `src/matching.js` | Hybrid vector semantic search + verified reputation boost + rule-based + AI scoring engine |
 | `src/replies.js` | Randomized question banks, niche variants, and interactive button configurations |
@@ -89,6 +100,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 | `src/config.js` | Environment configuration, embedding settings, and matching weights |
 | `migrations/01_pgvector_setup.sql` | PostgreSQL DDL script for pgvector extension, 384-dim embedding columns, and RPC search functions |
 | `migrations/02_feedback_and_reputation.sql` | PostgreSQL DDL script for reviews table, reputation metrics, and match feedback tracking |
+| `migrations/03_availability_pulse.sql` | PostgreSQL DDL script for freelancer availability status and last pulse check tracking |
 
 ---
 

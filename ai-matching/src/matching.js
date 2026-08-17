@@ -114,8 +114,16 @@ function scoreRuleBased(freelancer, jobRequest) {
     reputationMultiplier = 1.0 + (ratingDelta * 0.075 * confidence);
   }
 
+  // ── Availability Pulse Status Modifier ─────────────────────────────────
+  let pulseMultiplier = 1.0;
+  if (freelancer.availability_status === 'available_now') {
+    pulseMultiplier = 1.05; // +5% boost for actively available talent
+  } else if (freelancer.availability_status === 'limited_hours') {
+    pulseMultiplier = 0.95; // slight adjustment for limited capacity
+  }
+
   const baseTotal = skillScore * 0.5 + toolScore * 0.2 + budgetScore * 0.3;
-  const total = Math.min(100, Math.max(0, baseTotal * reputationMultiplier));
+  const total = Math.min(100, Math.max(0, baseTotal * reputationMultiplier * pulseMultiplier));
   return Math.round(total * 100) / 100;
 }
 

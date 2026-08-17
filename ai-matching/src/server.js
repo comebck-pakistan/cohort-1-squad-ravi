@@ -4,6 +4,7 @@ import { handleIncomingMessage } from './handlers/handleMessage.js';
 import { handleIcebreakerReply } from './handlers/icebreakerHandler.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
 import { checkAndTriggerDueFeedback } from './feedback.js';
+import { checkAndTriggerWeeklyPulse } from './pulse.js';
 
 const app = express();
 app.use(express.json());
@@ -119,6 +120,16 @@ app.all('/api/check-feedback', async (req, res) => {
   }
 });
 
+// Endpoint to trigger weekly availability pulse check-in manually or via cron
+app.all('/api/check-pulse', async (req, res) => {
+  try {
+    const sent = await checkAndTriggerWeeklyPulse();
+    res.json({ ok: true, pulse_prompts_sent: sent });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   console.log(`🚀 The bot listening on port ${config.port}`);
 
@@ -126,4 +137,9 @@ app.listen(config.port, () => {
   setInterval(() => {
     checkAndTriggerDueFeedback().catch(err => console.error('[server] Background feedback scan error:', err));
   }, 6 * 60 * 60 * 1000);
+
+  // Run periodic background availability pulse scan every 12 hours (43,200,000 ms)
+  setInterval(() => {
+    checkAndTriggerWeeklyPulse().catch(err => console.error('[server] Background pulse scan error:', err));
+  }, 12 * 60 * 60 * 1000);
 });
