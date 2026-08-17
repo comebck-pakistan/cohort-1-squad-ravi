@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Star, Search, Filter, ArrowUpRight, Zap, Target, DollarSign, Clock, Users } from 'lucide-react';
+import { Star, Search, ArrowUpRight, Target, DollarSign, Clock, Users } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthContext } from '@/components/auth/auth-provider';
 import { useMatches } from '@/hooks/useMatches';
@@ -35,14 +35,25 @@ function ScoreRing({ score, size = 56 }: { score: number; size?: number }) {
   );
 }
 
+function lifecycleLabel(status: string | null | undefined) {
+  return (status || 'matched').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function lifecycleVariant(status: string | null | undefined): 'success' | 'cyan' | 'destructive' | 'secondary' {
+  if (status === 'hired' || status === 'completed' || status === 'mutual_interest') return 'success';
+  if (status === 'shortlisted') return 'cyan';
+  if (status === 'declined') return 'destructive';
+  return 'secondary';
+}
+
 function MatchCard({ match }: { match: Match }) {
   const skills = parseSkills(match.freelancer?.skills ?? null);
-  const scoreColor = match.compatibility_score >= 80 ? 'text-emerald-400' :
-    match.compatibility_score >= 60 ? 'text-violet-400' : 'text-amber-400';
-  const confidenceLabel = match.compatibility_score >= 80 ? 'High' :
-    match.compatibility_score >= 60 ? 'Medium' : 'Low';
-  const confidenceVariant = match.compatibility_score >= 80 ? 'success' :
-    match.compatibility_score >= 60 ? 'default' : 'warning';
+  const overallScore = match.total_score ?? match.compatibility_score;
+  const trustScore = match.trust_score ?? match.freelancer?.trust_score ?? 0;
+  const confidenceLabel = overallScore >= 80 ? 'High' :
+    overallScore >= 60 ? 'Medium' : 'Low';
+  const confidenceVariant = overallScore >= 80 ? 'success' :
+    overallScore >= 60 ? 'default' : 'warning';
 
   return (
     <motion.div
@@ -61,9 +72,17 @@ function MatchCard({ match }: { match: Match }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2 mb-1">
                 <h3 className="font-semibold text-white text-sm truncate">{match.freelancer?.name ?? 'Anonymous'}</h3>
-                <Badge variant={confidenceVariant} className="text-xs flex-shrink-0">{confidenceLabel} confidence</Badge>
+                <div className="flex flex-wrap justify-end gap-1.5 flex-shrink-0">
+                  <Badge variant={lifecycleVariant(match.status)} className="text-xs">{lifecycleLabel(match.status)}</Badge>
+                  <Badge variant={confidenceVariant} className="text-xs">{confidenceLabel}</Badge>
+                </div>
               </div>
               <p className="text-xs text-white/40 mb-3 line-clamp-1">{match.ai_explanation || 'AI match based on skills and preferences'}</p>
+
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <Badge variant="secondary" className="text-xs">Skill {match.compatibility_score}%</Badge>
+                <Badge variant={trustScore >= 55 ? 'success' : trustScore >= 35 ? 'warning' : 'secondary'} className="text-xs">Trust {trustScore}</Badge>
+              </div>
 
               {/* Signals */}
               <div className="grid grid-cols-2 gap-2 mb-3">
@@ -96,7 +115,7 @@ function MatchCard({ match }: { match: Match }) {
               )}
             </div>
 
-            <ScoreRing score={match.compatibility_score} size={56} />
+            <ScoreRing score={overallScore} size={56} />
           </div>
 
           <div className="flex items-center justify-between pt-3 border-t border-white/[0.06] mt-2">
@@ -128,14 +147,15 @@ export default function MatchesPage() {
   const [minScore, setMinScore] = useState(0);
 
   const filtered = matches.filter(m => {
+    const overallScore = m.total_score ?? m.compatibility_score;
     const nameMatch = (m.freelancer?.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
       (m.freelancer?.skills ?? '').toLowerCase().includes(search.toLowerCase());
-    const scoreMatch = m.compatibility_score >= minScore;
+    const scoreMatch = overallScore >= minScore;
     return nameMatch && scoreMatch;
   });
 
-  const avgScore = matches.length ? Math.round(matches.reduce((a, b) => a + b.compatibility_score, 0) / matches.length) : 0;
-  const highConf = matches.filter(m => m.compatibility_score >= 80).length;
+  const avgScore = matches.length ? Math.round(matches.reduce((a, b) => a + (b.total_score ?? b.compatibility_score), 0) / matches.length) : 0;
+  const highConf = matches.filter(m => (m.total_score ?? m.compatibility_score) >= 80).length;
 
   return (
     <div className="p-6 md:p-8 max-w-5xl mx-auto">

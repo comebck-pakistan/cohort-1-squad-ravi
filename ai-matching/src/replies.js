@@ -47,16 +47,34 @@ const questions = {
     "Nice one! What's your name?",
   ],
   collect_profile_link: [
-    "Perfect. Drop a LinkedIn link or your CV/Resume link here. 📄 (or type 'skip' if you'd rather not share this)",
-    "Got it — can you share your LinkedIn or resume link? (or type 'skip' if you'd rather not share this)",
-    "Now send over your LinkedIn or CV link. (or type 'skip' if you'd rather not share this)",
-    "Almost there — LinkedIn or resume link, please. (or type 'skip' if you'd rather not share this)",
+    "Perfect. Drop your LinkedIn link here. Verified profiles get matched first. 📄 (or type 'skip')",
+    "Got it — can you share your LinkedIn profile? Verified profiles get matched first. (or type 'skip')",
+  ],
+  collect_linkedin: [
+    "Perfect. Drop your LinkedIn link here. Verified profiles get matched first. 📄 (or type 'skip')",
+    "Got it — can you share your LinkedIn profile? Verified profiles get matched first. (or type 'skip')",
+    "Now send over your LinkedIn link if you have one. Verified profiles get matched first. (or type 'skip')",
+  ],
+  collect_github: [
+    "Got a GitHub profile? It helps verify your skills and gets strong profiles matched first. 🧑‍💻 (or type 'skip')",
+    "Send your GitHub link if you have one. Verified skill proof helps you get matched first. (or type 'skip')",
+    "Any GitHub profile I can check for skill proof? Verified profiles get matched first. (or type 'skip')",
+  ],
+  collect_cv: [
+    "Share a CV/resume link if you have one. It helps verify your skills and gets profiles matched first. 📄 (or type 'skip')",
+    "Got a CV or resume link? Verified profiles get matched first. (or type 'skip')",
+    "Send your CV/resume link for skill verification if available. (or type 'skip')",
+  ],
+  collect_support_docs: [
+    "Any extra proof links — certificates, docs, case studies? Verified profiles get matched first. 🛡️ (or type 'skip')",
+    "Send any supporting docs or certificates if you have them. Verified profiles get matched first. (or type 'skip')",
+    "One more proof link if you've got it: certificates, docs, or anything that backs up your skills. (or type 'skip')",
   ],
   collect_portfolio: [
-    "Any portfolio or work samples link you can send over? 📁",
-    "Got a portfolio link? Drop it here.",
-    "Do you have any work samples or a portfolio site to share?",
-    "Send me a link to your portfolio, if you've got one.",
+    "Any portfolio or work samples link you can send over? 📁 (or type 'skip')",
+    "Got a portfolio link? Drop it here, or type 'skip'.",
+    "Do you have any work samples or a portfolio site to share? (or type 'skip')",
+    "Send me a link to your portfolio if you've got one, or type 'skip'.",
   ],
   collect_skills: [
     "What skills/tools would you say you're best at? ⚙️",
@@ -81,6 +99,23 @@ const questions = {
     "Almost done — any project types or regions you prefer working with? 🎯",
     "Last one! Any preference on project type or where your clients are based?",
     "Wrapping up — got any preferences on project type or client location?",
+  ],
+  collect_working_status: [
+    "Quick one — are you currently open to taking on new work? (yes/no) 💼",
+    "Are you available for new projects right now? A simple yes or no works! ✅",
+    "Almost done! Are you actively looking for work at the moment? (yes/no)",
+    "One more thing — should I match you with clients right now, or are you fully booked? (yes = match me)",
+  ],
+  collect_hiring_status: [
+    "Quick check — are you actively hiring for this right now? (yes/no) 🎯",
+    "Are you ready to hire as soon as we find the right person? (yes/no) ✅",
+    "One quick thing — is this an active hire right now, or are you just planning ahead? (yes = hiring now)",
+    "Before the last step: are you currently hiring for this project? A simple yes or no works!",
+  ],
+  collect_contact_sharing: [
+    "Do you want matched people to see your WhatsApp contact directly? (yes/no) If you say no, they'll have to request it and I'll ask you first.",
+    "Should I show your WhatsApp contact to approved matches automatically? (yes/no) If not, I'll only share it after you approve.",
+    "Contact privacy check: can matched people see your WhatsApp number directly? A simple yes or no works.",
   ],
 };
 
@@ -322,13 +357,13 @@ export function pickEditVagueReply(currentData) {
 
 export function pickEditConfirmReply(field) {
   const text = pickRandom(editSpecificConfirmReplies);
-  return text.replace(/\{FIELD\}/g, field.replace('_', ' '));
+  return text.replace(/\{FIELD\}/g, field.replace(/_/g, ' '));
 }
 
 export function pickEditSuccessReply(field, value) {
   const text = pickRandom(editSuccessReplies);
   return text
-    .replace(/\{FIELD\}/g, field.replace('_', ' '))
+    .replace(/\{FIELD\}/g, field.replace(/_/g, ' '))
     .replace(/\{VALUE\}/g, value || 'Not provided');
 }
 

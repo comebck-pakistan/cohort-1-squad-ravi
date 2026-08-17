@@ -30,6 +30,37 @@ export function isAckOnly(text) {
   return ACK_EXACT.has(t);
 }
 
+// ── Yes/No answers (for the hiring/working status steps) ─────────────────────
+// Note: at a yes/no question, many ack-ish words ("yes", "sure", "yep") ARE the
+// answer — so the yes/no fast-path must run on these steps instead of the ack
+// short-circuit. Includes common Roman-Urdu forms (haan/ji/nahi).
+const YES_EXACT = new Set([
+  'yes', 'yeah', 'yep', 'yup', 'yea', 'y', 'sure', 'definitely', 'absolutely',
+  'of course', 'ofcourse', 'for sure', 'i am', 'yes i am', 'currently hiring',
+  'hiring', 'am hiring', 'open to work', 'available', 'haan', 'han', 'ji', 'jee',
+  'ji haan', 'g', 'bilkul',
+]);
+const NO_EXACT = new Set([
+  'no', 'nope', 'nah', 'n', 'not really', 'not now', 'not yet', 'not currently',
+  'not at the moment', 'no thanks', 'not hiring', 'not working', 'unavailable',
+  'not available', 'no i am not', 'im not', "i'm not", 'i am not', 'nahi', 'nai',
+]);
+
+/**
+ * Parses a message as a yes/no answer. Returns true, false, or null when the
+ * message isn't a clear yes or no (caller falls through to Groq).
+ */
+export function parseYesNoLocally(text) {
+  if (!text) return null;
+  const t = text.trim().toLowerCase().replace(/[!.…]+$/, '').trim();
+  if (YES_EXACT.has(t)) return true;
+  if (NO_EXACT.has(t)) return false;
+  // Leading-word forms: "yes, right now", "no not yet", "nahi abhi nahi"
+  if (/^(yes|yeah|yep|yup|haan|ji|bilkul)\b/.test(t)) return true;
+  if (/^(no|nope|nah|nahi|not)\b/.test(t)) return false;
+  return null;
+}
+
 // ── Recurring / cadence patterns ─────────────────────────────────────────────
 const RECURRING_PATTERNS = [
   /\bevery\s+(day|week|month|fortnight|two\s+weeks?|couple\s+of\s+weeks?)/i,

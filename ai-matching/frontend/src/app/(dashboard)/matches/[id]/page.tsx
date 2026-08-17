@@ -3,7 +3,7 @@
 import { use } from 'react';
 import { motion } from 'framer-motion';
 import {
-  ArrowLeft, MessageCircle, ExternalLink, Star, Target,
+  ArrowLeft, MessageCircle, ExternalLink,
   DollarSign, Clock, Globe, Briefcase, AlertTriangle, ChevronRight, Zap
 } from 'lucide-react';
 import Link from 'next/link';
@@ -37,6 +37,17 @@ function ScoreRing({ score, size = 80 }: { score: number; size?: number }) {
   );
 }
 
+function lifecycleLabel(status: string | null | undefined) {
+  return (status || 'matched').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function lifecycleVariant(status: string | null | undefined): 'success' | 'cyan' | 'destructive' | 'secondary' {
+  if (status === 'hired' || status === 'completed' || status === 'mutual_interest') return 'success';
+  if (status === 'shortlisted') return 'cyan';
+  if (status === 'declined') return 'destructive';
+  return 'secondary';
+}
+
 export default function MatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: match, isLoading } = useMatchById(id);
@@ -66,15 +77,17 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   const skills = parseSkills(match.freelancer?.skills ?? null);
-  const tools = parseSkills(match.freelancer?.tools ?? null);
-  const score = match.compatibility_score;
+  const score = match.total_score ?? match.compatibility_score;
+  const skillScore = match.compatibility_score;
+  const trustScore = match.trust_score ?? match.freelancer?.trust_score ?? 0;
+  const canContactFreelancer = match.freelancer?.contact_sharing_allowed === true;
 
   const radarData = [
-    { axis: 'Skills', value: Math.min(100, score + (match.skills_overlap?.length ?? 0) * 5) },
+    { axis: 'Skills', value: Math.min(100, skillScore + (match.skills_overlap?.length ?? 0) * 5) },
     { axis: 'Budget', value: match.budget_fit ? 90 : 50 },
     { axis: 'Availability', value: match.availability_fit ? 95 : 45 },
-    { axis: 'Experience', value: Math.max(40, score - 5) },
-    { axis: 'Preferences', value: Math.max(50, score + 10) },
+    { axis: 'Experience', value: Math.max(40, skillScore - 5) },
+    { axis: 'Preferences', value: Math.max(50, skillScore + 10) },
   ];
 
   return (
@@ -101,13 +114,14 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
                 <h1 className="font-display text-2xl font-bold text-white mb-1">{match.freelancer?.name ?? 'Anonymous'}</h1>
                 <p className="text-white/50 text-sm mb-3">{skills.slice(0, 3).join(' · ')}</p>
                 <div className="flex flex-wrap gap-2">
+                  <Badge variant={lifecycleVariant(match.status)} className="text-xs">{lifecycleLabel(match.status)}</Badge>
                   {skills.map(s => <Badge key={s} variant="default" className="text-xs">{s}</Badge>)}
                 </div>
               </div>
               <ScoreRing score={score} size={80} />
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-4 border-t border-white/[0.06]">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6 pt-4 border-t border-white/[0.06]">
               <div>
                 <div className="text-xs text-white/30 mb-1 flex items-center gap-1"><DollarSign className="w-3 h-3" /> Rate</div>
                 <div className="text-sm font-medium text-white">{match.freelancer?.rate ?? 'TBD'}</div>
@@ -123,6 +137,21 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
               <div>
                 <div className="text-xs text-white/30 mb-1">Available Now</div>
                 <Badge variant={match.availability_fit ? 'success' : 'warning'}>{match.availability_fit ? 'Yes' : 'Limited'}</Badge>
+              </div>
+              <div>
+                <div className="text-xs text-white/30 mb-1">Trust</div>
+                <Badge variant={trustScore >= 55 ? 'success' : trustScore >= 35 ? 'warning' : 'secondary'}>{trustScore}/100</Badge>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+                <div className="text-xs text-white/30 mb-1">Freelancer status</div>
+                <div className="text-sm font-medium text-white">{lifecycleLabel(match.freelancer_status)}</div>
+              </div>
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+                <div className="text-xs text-white/30 mb-1">Client status</div>
+                <div className="text-sm font-medium text-white">{lifecycleLabel(match.client_status)}</div>
               </div>
             </div>
           </CardContent>
@@ -227,15 +256,24 @@ export default function MatchDetailPage({ params }: { params: Promise<{ id: stri
         <div className="glass-card p-6 flex items-center justify-between gap-4 flex-wrap border-emerald-500/20 bg-emerald-500/5">
           <div>
             <h3 className="font-semibold text-white mb-1">Ready to connect?</h3>
-            <p className="text-sm text-white/50">Reach out directly through WhatsApp</p>
+            <p className="text-sm text-white/50">
+              {canContactFreelancer ? 'Reach out directly through WhatsApp' : 'This contact is private. Request approval through the WhatsApp bot.'}
+            </p>
           </div>
-          <a href={getWhatsAppLink(match.freelancer?.phone, `Hi ${match.freelancer?.name ?? ''}, I found your profile on AI Matchmaker and I\'d love to discuss a potential project!`)}
-            target="_blank" rel="noopener noreferrer">
-            <Button variant="whatsapp" size="lg" className="gap-2">
+          {canContactFreelancer ? (
+            <a href={getWhatsAppLink(match.freelancer?.phone, `Hi ${match.freelancer?.name ?? ''}, I found your profile on AI Matchmaker and I\'d love to discuss a potential project!`)}
+              target="_blank" rel="noopener noreferrer">
+              <Button variant="whatsapp" size="lg" className="gap-2">
+                <MessageCircle className="w-5 h-5" />
+                Contact via WhatsApp
+              </Button>
+            </a>
+          ) : (
+            <Button variant="secondary" size="lg" className="gap-2" disabled>
               <MessageCircle className="w-5 h-5" />
-              Contact via WhatsApp
+              Contact Private
             </Button>
-          </a>
+          )}
         </div>
       </motion.div>
     </div>
