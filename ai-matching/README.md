@@ -6,6 +6,14 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 ## Changelog by Qaim
 
+### Project Feedback & Verified Reputation Score ⭐
+- **Automated Post-Project Feedback Loop:** When a project's deadline passes, the bot scans connected matches and automatically triggers an interactive WhatsApp review prompt to both Client and Freelancer (`src/feedback.js`).
+- **Interactive 1–5 ⭐ Rating Buttons:** Users can submit verified ratings using 1-tap buttons (`[⭐⭐⭐⭐⭐ 5/5]`, `[⭐⭐⭐⭐ 4/5]`, `[⭐ 3 or below]`) or plain text (`1` to `5`).
+- **Two-Step Review with Notes:** After rating, users can leave an optional review note with a `[Skip Note]` quick reply.
+- **Verified Reputation Math:** Ratings are stored in Supabase (`reviews` table), updating real-time average ratings (`rating_avg`) and completed review counts (`review_count`) on profiles.
+- **Dynamic Matching Algorithm Boost:** Freelancers with verified 5-star ratings receive a rule-based boost (up to +15%), and their verified track record is dynamically factored into Groq AI's fit evaluation and match pitch.
+- **SQL Migration & Background Scanner:** Added [`migrations/02_feedback_and_reputation.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/02_feedback_and_reputation.sql), a 6-hour automated background scanner, and an on-demand endpoint (`ALL /api/check-feedback`).
+
 ### Vector Semantic Search with pgvector in Supabase ⚡
 - Integrated **pgvector semantic search** in Supabase to eliminate the limitations of exact keyword matching (e.g. matching "Frontend Engineer" with "React Dev" or "Copywriter" with "Content Creator").
 - **100% Free Dense Vector Embeddings:** Generates 384-dimensional vector embeddings using Hugging Face's free serverless inference API with `sentence-transformers/all-MiniLM-L6-v2` (`src/embeddings.js`). Zero paid OpenAI API key required.
@@ -72,13 +80,15 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 | `src/localHandler.js` | Fast-path local parsing for ~80% of messages (roles, hire types, skills, rates, buttons) without AI calls |
 | `src/deadline.js` | Local deadline/timeline parser and relative date estimator |
 | `src/embeddings.js` | Dense vector embedding generator and semantic text formatters for profiles and jobs |
+| `src/feedback.js` | Automated post-deadline feedback trigger scanner and interactive rating prompts |
 | `src/groq.js` | Groq LLM fallback for ambiguous conversation extractions and edge cases |
-| `src/matching.js` | Hybrid vector semantic search + rule-based + AI scoring matching engine & notifications |
+| `src/matching.js` | Hybrid vector semantic search + verified reputation boost + rule-based + AI scoring engine |
 | `src/replies.js` | Randomized question banks, niche variants, and interactive button configurations |
-| `src/supabase.js` | All Supabase database operations (profiles, job requests, pgvector searches, matches, conversations) |
+| `src/supabase.js` | All Supabase database operations (profiles, job requests, reviews, reputation, matches, conversations) |
 | `src/whatsapp.js` | WhatsApp Cloud API integration (text messages, interactive buttons, list menus, typing status) |
 | `src/config.js` | Environment configuration, embedding settings, and matching weights |
-| `migrations/01_pgvector_setup.sql` | PostgreSQL DDL script for pgvector extension, embedding columns, indexes, and RPC search functions |
+| `migrations/01_pgvector_setup.sql` | PostgreSQL DDL script for pgvector extension, 384-dim embedding columns, and RPC search functions |
+| `migrations/02_feedback_and_reputation.sql` | PostgreSQL DDL script for reviews table, reputation metrics, and match feedback tracking |
 
 ---
 

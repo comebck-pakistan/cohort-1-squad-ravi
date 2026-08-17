@@ -393,3 +393,112 @@ export async function setAvailability(phone, role, isAvailable) {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+//  REVIEWS & REPUTATION SYSTEM
+// ═════════════════════════════════════════════════════════════════════════════
+
+// --- Save a review and update reviewee reputation score ---
+export async function saveReview({
+  matchId,
+  reviewerPhone,
+  reviewerRole,
+  revieweePhone,
+  revieweeRole,
+  rating,
+  feedbackNote,
+  projectTitle,
+}) {
+  const row = {
+    match_id: matchId || null,
+    reviewer_phone: reviewerPhone,
+    reviewer_role: reviewerRole,
+    reviewee_phone: revieweePhone,
+    reviewee_role: revieweeRole,
+    rating: Math.max(1, Math.min(5, parseInt(rating, 10) || 5)),
+    feedback_note: feedbackNote || null,
+    project_title: projectTitle || null,
+  };
+
+  const { data, error } = await supabase.from('reviews').insert(row).select();
+  if (error) {
+    console.error('[supabase] saveReview FAILED:', JSON.stringify(error));
+    return null;
+  }
+
+  // Update match review status
+  if (matchId) {
+    const updateField = reviewerRole === 'client' ? 'client_reviewed' : 'freelancer_reviewed';
+    await supabase.from('matches').update({ [updateField]: true }).eq('id', matchId);
+  }
+
+  // Recalculate average rating & review count for the reviewee
+  const { data: allReviews } = await supabase
+    .from('reviews')
+    .select('rating')
+    .eq('reviewee_phone', revieweePhone);
+
+  if (allReviews && allReviews.length > 0) {
+    const count = allReviews.length;
+    const sum = allReviews.reduce((acc, r) => acc + r.rating, 0);
+    const avg = Math.round((sum / count) * 10) / 10;
+
+    const targetTable = revieweeRole === 'freelancer' ? 'freelancers' : 'job_requests';
+    await supabase
+      .from(targetTable)
+      .update({ rating_avg: avg, review_count: count })
+      .eq('phone', revieweePhone);
+
+    console.log(`[supabase] Updated reputation for ${revieweePhone} (${targetTable}): ${avg}⭐ (${count} reviews)`);
+  }
+
+  return data?.[0] || null;
+}
+
+// --- Get reputation summary for a user ---
+export async function getReputation(phone, role = 'freelancer') {
+  const table = role === 'freelancer' ? 'freelancers' : 'job_requests';
+  const { data: user } = await supabase
+    .from(table)
+    .select('rating_avg, review_count')
+    .eq('phone', phone)
+    .single();
+
+  const { data: recentReviews } = await supabase
+    .from('reviews')
+    .select('*')
+    .eq('reviewee_phone', phone)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  return {
+    rating_avg: user?.rating_avg || 0,
+    review_count: user?.review_count || 0,
+    recent_reviews: recentReviews || [],
+  };
+}
+
+// --- Fetch connected matches that are due for feedback ---
+export async function getMatchesDueForFeedback() {
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .eq('status', 'connected')
+    .is('feedback_requested_at', null);
+
+  if (error) {
+    console.error('[supabase] getMatchesDueForFeedback error:', JSON.stringify(error));
+    return [];
+  }
+  return data || [];
+}
+
+// --- Mark match as feedback requested ---
+export async function markFeedbackRequested(matchId) {
+  const { error } = await supabase
+    .from('matches')
+    .update({ feedback_requested_at: new Date().toISOString() })
+    .eq('id', matchId);
+
+  if (error) console.error(`[supabase] markFeedbackRequested (${matchId}) error:`, JSON.stringify(error));
+}
+

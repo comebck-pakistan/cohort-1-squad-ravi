@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
 import { handleIcebreakerReply } from './handlers/icebreakerHandler.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
+import { checkAndTriggerDueFeedback } from './feedback.js';
 
 const app = express();
 app.use(express.json());
@@ -108,6 +109,21 @@ app.get('/', (req, res) => {
   res.send('The bot is running.');
 });
 
+// Endpoint to trigger post-project feedback check manually or via cron
+app.all('/api/check-feedback', async (req, res) => {
+  try {
+    const triggered = await checkAndTriggerDueFeedback();
+    res.json({ ok: true, feedback_prompts_triggered: triggered });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   console.log(`🚀 The bot listening on port ${config.port}`);
+
+  // Run periodic background feedback scan every 6 hours (21,600,000 ms)
+  setInterval(() => {
+    checkAndTriggerDueFeedback().catch(err => console.error('[server] Background feedback scan error:', err));
+  }, 6 * 60 * 60 * 1000);
 });

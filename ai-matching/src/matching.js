@@ -104,7 +104,18 @@ function scoreRuleBased(freelancer, jobRequest) {
     }
   }
 
-  const total = skillScore * 0.5 + toolScore * 0.2 + budgetScore * 0.3;
+  // ── Verified Reputation Modifier (up to +15% boost or penalty) ─────────
+  let reputationMultiplier = 1.0;
+  const avg = Number(freelancer.rating_avg);
+  const count = Number(freelancer.review_count);
+  if (avg > 0 && count > 0) {
+    const ratingDelta = avg - 3.0; // 3.0 is neutral
+    const confidence = Math.min(1.0, count / 3); // full confidence at 3+ reviews
+    reputationMultiplier = 1.0 + (ratingDelta * 0.075 * confidence);
+  }
+
+  const baseTotal = skillScore * 0.5 + toolScore * 0.2 + budgetScore * 0.3;
+  const total = Math.min(100, Math.max(0, baseTotal * reputationMultiplier));
   return Math.round(total * 100) / 100;
 }
 
@@ -129,6 +140,7 @@ async function scoreAIFit(freelancer, jobRequest) {
     `Freelancer Preferences: ${freelancer.preferences || ''}`,
     `Freelancer Rate: ${freelancer.rate || ''}`,
     `Freelancer Availability: ${freelancer.availability || ''}`,
+    `Freelancer Verified Reputation: ${freelancer.rating_avg ? `${freelancer.rating_avg}⭐ (${freelancer.review_count} verified projects completed)` : 'New talent (0 reviews yet)'}`,
   ].join('\n');
 
   try {

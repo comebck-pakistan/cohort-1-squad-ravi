@@ -12,6 +12,8 @@ import {
   updateMatchStatus,
   findJobRequest,
   setAvailability,
+  saveReview,
+  getReputation,
 } from '../supabase.js';
 import { extractConversationData } from '../groq.js';
 import { findMatchesForClient, findMatchesForFreelancer, persistAndNotifyMatches } from '../matching.js';
@@ -64,6 +66,138 @@ const SHOW_MATCHES_PHRASES = ['show my matches', 'my matches', 'show matches'];
 const GET_STARTED_PHRASES = ['get started', 'get_started', 'start_onboarding', 'start onboarding'];
 const LEARN_MORE_PHRASES  = ['learn what this bot does', 'learn_more', 'learn more', 'what does this bot do', 'what this bot does'];
 const UPDATE_INFO_PHRASES = ['update my info', 'update_info', 'update info'];
+
+/**
+ * Handles post-project rating submissions and review notes.
+ */
+async function handleFeedbackSubmission({ phone, messageText, conversation }) {
+  const lowerText = (messageText || '').toLowerCase().trim();
+  const tempData = conversation?.temp_data || {};
+  const currentFeedback = tempData.feedback || {};
+
+  // Case A: User is submitting the optional review note (or tapping Skip Note)
+  if (conversation?.step === 'awaiting_feedback_note' && currentFeedback.rating) {
+    const isSkip = messageText === 'skip_feedback_note' || isSkipMessage(lowerText);
+    const feedbackNote = isSkip ? null : messageText.trim();
+
+    await saveReview({
+      matchId: currentFeedback.matchId,
+      reviewerPhone: phone,
+      reviewerRole: currentFeedback.reviewerRole || 'client',
+      revieweePhone: currentFeedback.revieweePhone,
+      revieweeRole: currentFeedback.revieweeRole || 'freelancer',
+      rating: currentFeedback.rating,
+      feedbackNote,
+      projectTitle: currentFeedback.projectTitle,
+    });
+
+    const counterpartName = currentFeedback.counterpartName || 'your match';
+    const noteAck = feedbackNote ? `\n\n📝 Note: "${feedbackNote}"` : '';
+
+    await sendWhatsAppMessage(
+      phone,
+      `✅ *Thank you for your feedback!* Your ${currentFeedback.rating}⭐ rating for *${counterpartName}* has been verified and recorded to their reputation score.${noteAck} 🚀`
+    );
+
+    // Reset conversation step back to completed
+    const nextTempData = { ...tempData };
+    delete nextTempData.feedback;
+    await saveConversation({
+      id: conversation.id,
+      phone,
+      role: conversation.role,
+      step: 'completed',
+      temp_data: nextTempData,
+    });
+    return true;
+  }
+
+  // Case B: User clicked an interactive rating button or typed a rating
+  const rateButtonMatch = (messageText || '').match(/^rate_([1-5])(?:_(\d+))?$/);
+  const textRatingMatch = lowerText.match(/^(?:rate\s*)?([1-5])(?:\s*\/\s*5|\s*stars?)?$/);
+
+  // Only trigger text rating if user is prompted or already completed onboarding
+  if (rateButtonMatch || (textRatingMatch && conversation?.step === 'completed')) {
+    const rating = parseInt(rateButtonMatch ? rateButtonMatch[1] : textRatingMatch[1], 10);
+    const rawMatchId = rateButtonMatch ? rateButtonMatch[2] : null;
+    let matchId = rawMatchId ? parseInt(rawMatchId, 10) : null;
+
+    let counterpartName = 'your counterpart';
+    let revieweePhone = null;
+    let revieweeRole = null;
+    let reviewerRole = null;
+    let projectTitle = 'Project';
+
+    const liveMatches = await getAllLiveMatchesForPhone(phone);
+    const targetMatch =
+      (matchId && liveMatches.find(m => m.id === matchId)) ||
+      liveMatches.find(m => m.status === 'connected') ||
+      liveMatches[0];
+
+    if (targetMatch) {
+      matchId = targetMatch.id;
+      const isClient = targetMatch.job_phone === phone;
+      reviewerRole = isClient ? 'client' : 'freelancer';
+      revieweeRole = isClient ? 'freelancer' : 'client';
+      revieweePhone = isClient ? targetMatch.freelancer_phone : targetMatch.job_phone;
+
+      if (isClient) {
+        const fl = await findFreelancer(revieweePhone);
+        counterpartName = fl?.name || 'Freelancer';
+        const jr = await findJobRequest(phone);
+        projectTitle = jr?.project_description?.slice(0, 40) || 'Project';
+      } else {
+        const jr = await findJobRequest(revieweePhone);
+        counterpartName = jr?.name || 'Client';
+        projectTitle = jr?.project_description?.slice(0, 40) || 'Project';
+      }
+    }
+
+    if (!revieweePhone) {
+      if (rateButtonMatch) {
+        await sendWhatsAppMessage(phone, `Thanks for the rating! You don't have any active project matches waiting for a review right now.`);
+        return true;
+      }
+      return false;
+    }
+
+    // Save pending rating in conversation state and prompt for note
+    const nextTempData = {
+      ...tempData,
+      feedback: {
+        matchId,
+        rating,
+        counterpartName,
+        revieweePhone,
+        revieweeRole,
+        reviewerRole,
+        projectTitle,
+      },
+    };
+
+    await saveConversation({
+      id: conversation?.id,
+      phone,
+      role: conversation?.role || reviewerRole,
+      step: 'awaiting_feedback_note',
+      temp_data: nextTempData,
+    });
+
+    const starIcons = '⭐'.repeat(rating);
+    const buttons = [{ id: 'skip_feedback_note', title: 'Skip Note' }];
+
+    await sendWhatsAppButtons(
+      phone,
+      `Got it! You gave *${counterpartName}* ${rating} / 5 ${starIcons}.\n\nWould you like to leave a quick note about your experience? (e.g. "Great communication and delivered on time!")\n\nOr tap *Skip Note* to submit right away:`,
+      buttons,
+      '⭐ Add Review Note',
+      'Tap Skip Note to submit now'
+    );
+    return true;
+  }
+
+  return false;
+}
 
 export async function handleIncomingMessage({ phone, messageText }) {
   // Artificial delay to ensure "typing..." indicator is visible even on fast paths
@@ -200,6 +334,12 @@ export async function handleIncomingMessage({ phone, messageText }) {
   if (RESET_PHRASES.some((phrase) => lowerText.includes(phrase))) {
     await resetUser(phone);
     await sendWhatsAppMessage(phone, getResetReply());
+    return;
+  }
+
+  // --- 1.2 POST-PROJECT FEEDBACK & RATINGS ---
+  const feedbackHandled = await handleFeedbackSubmission({ phone, messageText, conversation });
+  if (feedbackHandled) {
     return;
   }
 
