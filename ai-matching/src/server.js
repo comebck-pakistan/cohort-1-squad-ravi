@@ -1,35 +1,76 @@
 import express from 'express';
-import { config } from './config.js';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { config, validateConfig } from './config.js';
 import { handleIncomingMessage } from './handlers/handleMessage.js';
 import { handleIcebreakerReply } from './handlers/icebreakerHandler.js';
 import { markAsReadAndTyping, sendWhatsAppMessage } from './whatsapp.js';
 import { checkAndTriggerDueFeedback } from './feedback.js';
 import { checkAndTriggerWeeklyPulse } from './pulse.js';
+import {
+  verifyMetaWebhookSignature,
+  requireCronAuth,
+  userRateLimiter,
+  maskPhone,
+  sanitizeUserMessage,
+} from './security.js';
+
+// Validate configuration on boot
+validateConfig();
 
 const app = express();
-app.use(express.json());
 
-// --- Equivalent of "Webhook Verify (GET)" + "Respond Verification Challenge" ---
+// Trust reverse proxies (ngrok, Railway, Heroku) so client IPs and rate limiting work accurately
+app.set('trust proxy', 1);
+
+// 1. Security Headers via Helmet
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // API server does not render HTML
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+// 2. Global HTTP Request Body Limits & Raw Body Capture for HMAC verification
+app.use(
+  express.json({
+    limit: '64kb',
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+
+// 3. Global IP-based Rate Limiter (Protects against volumetric HTTP flood/DoS)
+const apiLimiter = rateLimit({
+  windowMs: config.security.httpRateLimitWindowMs,
+  max: config.security.httpRateLimitMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
+  message: { error: 'Too many requests, please try again later.' },
+});
+app.use(apiLimiter);
+
+// --- Webhook Verify (GET) ---
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  //console.log('DEBUG:', { mode, token, expected: config.whatsapp.verifyToken });
-
   if (mode === 'subscribe' && token === config.whatsapp.verifyToken) {
-    console.log('✅ Webhook verified');
+    console.log('✅ Webhook verified successfully');
     return res.status(200).send(challenge);
   }
   return res.sendStatus(403);
 });
 
-// A simple Set to store recently seen message IDs to deduplicate incoming webhooks
+// A Set to store recently seen message IDs to deduplicate incoming webhooks
 const processedMessageIds = new Set();
 
-// --- Equivalent of "Webhook Receive Message (POST)" + "Extract Webhook Data" + "Is Real Message?" ---
-app.post('/webhook', async (req, res) => {
-  // Acknowledge Meta immediately (equivalent of "Acknowledge Meta (200 OK)")
+// --- Webhook Receive Message (POST) with HMAC Signature Verification ---
+app.post('/webhook', verifyMetaWebhookSignature, async (req, res) => {
+  // Acknowledge Meta immediately
   res.sendStatus(200);
 
   try {
@@ -50,20 +91,31 @@ app.post('/webhook', async (req, res) => {
 
     // Keep the Set size manageable (prevent memory leak)
     if (processedMessageIds.size > 1000) {
-      // Remove the oldest 100 entries
       const iterator = processedMessageIds.values();
       for (let i = 0; i < 100; i++) {
         processedMessageIds.delete(iterator.next().value);
       }
     }
 
+    const phone = message.from;
+    const masked = maskPhone(phone);
+
+    // Rate Limiting per WhatsApp Phone Number
+    const rateCheck = userRateLimiter.check(phone);
+    if (!rateCheck.allowed) {
+      console.warn(`⏳ Rate limit exceeded for user ${masked}. Retry after ${rateCheck.retryAfterSec}s`);
+      await sendWhatsAppMessage(
+        phone,
+        `⏳ *Please slow down a bit!*\nYou are sending messages too quickly. Please wait ${rateCheck.retryAfterSec} seconds before sending your next message.`
+      );
+      return;
+    }
+
     try {
       await markAsReadAndTyping(message.id);
     } catch (err) {
-      console.error('Error marking as read/typing:', err);
+      console.error(`Error marking as read/typing for ${masked}:`, err.message);
     }
-
-    const phone = message.from;
 
     // --- INTERACTIVE MESSAGES (list_reply / button_reply) ---
     if (message.type === 'interactive') {
@@ -81,24 +133,26 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (buttonReply?.id) {
-        console.log(`[server] Button reply: phone=${phone}, id=${buttonReply.id}, title="${buttonReply.title}"`);
+        console.log(`[server] Button reply from ${masked}: id=${buttonReply.id}`);
         await handleIncomingMessage({ phone, messageText: buttonReply.id, buttonPayload: buttonReply });
         return;
       }
 
-      console.log(`[server] Unsupported interactive sub-type for phone=${phone}, ignoring.`);
+      console.log(`[server] Unsupported interactive sub-type for ${masked}, ignoring.`);
       return;
     }
 
     if (message.type !== 'text') {
       await sendWhatsAppMessage(
         phone,
-        "I can only read text messages right now. Please type out your answer or send a link instead! 📝"
+        'I can only read text messages right now. Please type out your answer or send a link instead! 📝'
       );
       return;
     }
 
-    const messageText = message.text?.body || '';
+    // Sanitize and cap text length
+    const rawText = message.text?.body || '';
+    const messageText = sanitizeUserMessage(rawText, config.security.maxMessageLength);
 
     await handleIncomingMessage({ phone, messageText });
   } catch (err) {
@@ -110,23 +164,47 @@ app.get('/', (req, res) => {
   res.send('The bot is running.');
 });
 
-// Endpoint to trigger post-project feedback check manually or via cron
-app.all('/api/check-feedback', async (req, res) => {
+// Endpoint to trigger post-project feedback check (Protected with Cron Auth)
+app.post('/api/check-feedback', requireCronAuth, async (req, res) => {
   try {
     const triggered = await checkAndTriggerDueFeedback();
     res.json({ ok: true, feedback_prompts_triggered: triggered });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('[api/check-feedback] Execution error:', err);
+    res.status(500).json({ ok: false, error: 'Internal server error processing feedback scan' });
   }
 });
 
-// Endpoint to trigger weekly availability pulse check-in manually or via cron
-app.all('/api/check-pulse', async (req, res) => {
+// Support GET for testing if authorized
+app.get('/api/check-feedback', requireCronAuth, async (req, res) => {
+  try {
+    const triggered = await checkAndTriggerDueFeedback();
+    res.json({ ok: true, feedback_prompts_triggered: triggered });
+  } catch (err) {
+    console.error('[api/check-feedback] Execution error:', err);
+    res.status(500).json({ ok: false, error: 'Internal server error processing feedback scan' });
+  }
+});
+
+// Endpoint to trigger weekly availability pulse check-in (Protected with Cron Auth)
+app.post('/api/check-pulse', requireCronAuth, async (req, res) => {
   try {
     const sent = await checkAndTriggerWeeklyPulse();
     res.json({ ok: true, pulse_prompts_sent: sent });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('[api/check-pulse] Execution error:', err);
+    res.status(500).json({ ok: false, error: 'Internal server error processing pulse scan' });
+  }
+});
+
+// Support GET for testing if authorized
+app.get('/api/check-pulse', requireCronAuth, async (req, res) => {
+  try {
+    const sent = await checkAndTriggerWeeklyPulse();
+    res.json({ ok: true, pulse_prompts_sent: sent });
+  } catch (err) {
+    console.error('[api/check-pulse] Execution error:', err);
+    res.status(500).json({ ok: false, error: 'Internal server error processing pulse scan' });
   }
 });
 

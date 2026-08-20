@@ -35,6 +35,82 @@ import { tryHandleLocally } from '../localHandler.js';
 import { parsePulseSelection, updateFreelancerPulseStatus } from '../pulse.js';
 
 import { handleIcebreakerReply } from './icebreakerHandler.js';
+import { matchSearchLimiter, maskPhone } from '../security.js';
+
+/**
+ * Builds human-readable summary blocks for live / connected matches.
+ */
+async function buildLiveMatchBlocks(liveMatches, phone) {
+  const freelancerPhones = new Set();
+  const clientPhones = new Set();
+  for (const m of liveMatches) {
+    if (m.freelancer_phone !== phone) freelancerPhones.add(m.freelancer_phone);
+    if (m.job_phone !== phone) clientPhones.add(m.job_phone);
+  }
+
+  const profilePromises = [];
+  const freelancerMap = new Map();
+  const jobMap = new Map();
+
+  for (const fp of freelancerPhones) {
+    profilePromises.push(findFreelancer(fp).then(p => p && freelancerMap.set(fp, p)));
+  }
+  for (const cp of clientPhones) {
+    profilePromises.push(findJobRequest(cp).then(j => j && jobMap.set(cp, j)));
+  }
+  profilePromises.push(findFreelancer(phone).then(p => p && freelancerMap.set(phone, p)));
+  profilePromises.push(findJobRequest(phone).then(j => j && jobMap.set(phone, j)));
+  await Promise.all(profilePromises);
+
+  return liveMatches.map((m, i) => {
+    const isClient = m.job_phone === phone;
+    const otherPhone = isClient ? m.freelancer_phone : m.job_phone;
+
+    let otherName;
+    let projectDesc;
+    if (isClient) {
+      const fl = freelancerMap.get(otherPhone);
+      otherName = fl?.name || otherPhone;
+      const jr = jobMap.get(phone);
+      projectDesc = jr?.project_description || jr?.brief_description || 'N/A';
+    } else {
+      const jr = jobMap.get(otherPhone);
+      otherName = jr?.name || otherPhone;
+      projectDesc = jr?.project_description || jr?.brief_description || 'N/A';
+    }
+
+    let stage;
+    if (m.status === 'connected') {
+      stage = '✅ Connected';
+    } else if (m.status === 'awaiting_response') {
+      const isFirstParty = m.initiator_role === (isClient ? 'freelancer' : 'client');
+      stage = isFirstParty ? '⏳ Awaiting your response' : '⏳ Awaiting their response';
+    } else if (m.status === 'awaiting_other') {
+      const isFirstParty = m.initiator_role === (isClient ? 'freelancer' : 'client');
+      stage = isFirstParty ? '⏳ Awaiting their response' : '⏳ Awaiting your response';
+    } else {
+      stage = '🔍 Pending';
+    }
+
+    const lines = [
+      `*Match ${i + 1}:* ${otherName}`,
+      `📋 ${projectDesc}`,
+      stage,
+    ];
+
+    if (m.status === 'connected') {
+      if (isClient) {
+        const fl = freelancerMap.get(otherPhone);
+        lines.push(`📞 ${fl?.phone || otherPhone}`);
+        if (fl?.profile_link) lines.push(`🔗 ${fl.profile_link}`);
+      } else {
+        lines.push(`📞 ${otherPhone}`);
+      }
+    }
+
+    return lines.join('\n');
+  });
+}
 
 /**
  * Sends either an interactive button message or regular text message
@@ -63,7 +139,13 @@ function isReturningAfterInactivity(conversationRow) {
 }
 
 const RESET_PHRASES = ['reset ai', 'reset bot'];
-const SHOW_MATCHES_PHRASES = ['show my matches', 'my matches', 'show matches'];
+const SEARCH_MATCHES_PHRASES = [
+  'show my matches', 'show matches', 'my matches', 'show match', 'my match',
+  'find matches', 'find my matches', 'find match', 'search matches', 'search match',
+  'search for matches', 'any match', 'any matches', 'have you found any match',
+  'have you found any matches', 'check matches', 'look for matches', 'find gigs',
+  'find work', 'find clients', 'matches?', 'search'
+];
 const GET_STARTED_PHRASES = ['get started', 'get_started', 'start_onboarding', 'start onboarding'];
 const LEARN_MORE_PHRASES  = ['learn what this bot does', 'learn_more', 'learn more', 'what does this bot do', 'what this bot does'];
 const UPDATE_INFO_PHRASES = ['update my info', 'update_info', 'update info'];
@@ -240,94 +322,153 @@ export async function handleIncomingMessage({ phone, messageText }) {
     return;
   }
 
-  // --- 0.5 SHOW MY MATCHES ---
-  if (SHOW_MATCHES_PHRASES.some((phrase) => lowerText.includes(phrase))) {
-    const liveMatches = await getAllLiveMatchesForPhone(phone);
+  // --- 0.5 SHOW MY MATCHES & LIVE ON-DEMAND MATCH SEARCH ---
+  const isSearchMatchRequest = SEARCH_MATCHES_PHRASES.some((phrase) => lowerText.includes(phrase));
+  if (isSearchMatchRequest) {
+    // 1. Resolve registered profile
+    let role = conversation?.role;
+    let profile = freelancer;
+    if (!profile) {
+      if (role === 'client') {
+        profile = await findJobRequest(phone);
+      } else {
+        profile = await findFreelancer(phone);
+        if (profile) {
+          role = 'freelancer';
+        } else {
+          profile = await findJobRequest(phone);
+          if (profile) role = 'client';
+        }
+      }
+    } else {
+      role = 'freelancer';
+    }
 
-    if (liveMatches.length === 0) {
-      await sendWhatsAppMessage(phone, `You don't have any active matches right now. We'll notify you as soon as one comes up! 🔔`);
+    if (!profile) {
+      await sendWhatsAppMessage(
+        phone,
+        `You haven't completed your profile registration yet! Type *Hi* to get started. 🚀`
+      );
       return;
     }
 
-    // Collect all unique counterpart phones so we can batch-fetch profiles
-    const freelancerPhones = new Set();
-    const clientPhones = new Set();
-    for (const m of liveMatches) {
-      if (m.freelancer_phone !== phone) freelancerPhones.add(m.freelancer_phone);
-      if (m.job_phone !== phone) clientPhones.add(m.job_phone);
-    }
+    // 2. Pending match safeguard:
+    // If user already has an active pending match in flight, don't blast other candidates
+    const pendingMatch = activeMatches.find(m => m.status === 'awaiting_response' || m.status === 'awaiting_other');
+    if (pendingMatch) {
+      const isClient = pendingMatch.job_phone === phone;
+      const isFirstParty = pendingMatch.initiator_role === (isClient ? 'freelancer' : 'client');
+      const isTheirTurn = (pendingMatch.status === 'awaiting_response' && isFirstParty) ||
+                          (pendingMatch.status === 'awaiting_other' && !isFirstParty);
 
-    // Fetch counterpart profiles in parallel
-    const profilePromises = [];
-    const freelancerMap = new Map();
-    const jobMap = new Map();
-
-    for (const fp of freelancerPhones) {
-      profilePromises.push(findFreelancer(fp).then(p => p && freelancerMap.set(fp, p)));
-    }
-    for (const cp of clientPhones) {
-      profilePromises.push(findJobRequest(cp).then(j => j && jobMap.set(cp, j)));
-    }
-    // Also fetch own profiles in case we're on the other side
-    profilePromises.push(findFreelancer(phone).then(p => p && freelancerMap.set(phone, p)));
-    profilePromises.push(findJobRequest(phone).then(j => j && jobMap.set(phone, j)));
-    await Promise.all(profilePromises);
-
-    const blocks = liveMatches.map((m, i) => {
-      const isClient = m.job_phone === phone;
-      const otherPhone = isClient ? m.freelancer_phone : m.job_phone;
-
-      // Resolve the counterpart's name and the project description
-      let otherName;
-      let projectDesc;
-      if (isClient) {
-        const fl = freelancerMap.get(otherPhone);
-        otherName = fl?.name || otherPhone;
-        const jr = jobMap.get(phone);
-        projectDesc = jr?.project_description || jr?.brief_description || 'N/A';
+      if (isTheirTurn) {
+        const buttons = [
+          { id: 'match_interested', title: '✅ Interested' },
+          { id: 'match_declined',   title: '❌ Not Interested' },
+        ];
+        await sendWhatsAppButtons(
+          phone,
+          `⏳ *You have a match waiting for your response!*\n\nPlease reply *interested* to connect, or *not interested* to pass before running a new search.`,
+          buttons,
+          '⏳ Match Pending',
+          'Tap an option'
+        );
+        return;
       } else {
-        const jr = jobMap.get(otherPhone);
-        otherName = jr?.name || otherPhone;
-        projectDesc = jr?.project_description || jr?.brief_description || 'N/A';
+        await sendWhatsAppMessage(
+          phone,
+          `⏳ *Match in progress!*\nWe've already notified the candidate about your match and are waiting for their response. We'll message you immediately once they confirm! 🔔`
+        );
+        return;
       }
+    }
 
-      // Determine the human-readable stage
-      let stage;
-      if (m.status === 'connected') {
-        stage = '✅ Connected';
-      } else if (m.status === 'awaiting_response') {
-        // Figure out whose turn it is
-        const isFirstParty = m.initiator_role === (isClient ? 'freelancer' : 'client');
-        stage = isFirstParty ? '⏳ Awaiting your response' : '⏳ Awaiting their response';
-      } else if (m.status === 'awaiting_other') {
-        const isFirstParty = m.initiator_role === (isClient ? 'freelancer' : 'client');
-        stage = isFirstParty ? '⏳ Awaiting their response' : '⏳ Awaiting your response';
+    // 3. Fetch current live matches
+    const liveMatches = await getAllLiveMatchesForPhone(phone);
+    const connectedMatches = liveMatches.filter(m => m.status === 'connected');
+
+    // 4. Anti-Abuse Cooldown Check
+    const cooldownCheck = matchSearchLimiter.check(phone);
+    if (!cooldownCheck.allowed) {
+      console.log(`[matching] On-demand search throttled for ${maskPhone(phone)} (retry in ${cooldownCheck.retryAfterMin}m)`);
+      if (connectedMatches.length > 0) {
+        const blocks = await buildLiveMatchBlocks(connectedMatches, phone);
+        await sendWhatsAppMessage(
+          phone,
+          `🔍 *We searched for matches recently!*\n\n📊 *Your Connected Matches (${connectedMatches.length}):*\n\n` +
+          blocks.join('\n\n') +
+          `\n\n⏳ You can run another manual search in *${cooldownCheck.retryAfterMin} minute(s)*.`
+        );
       } else {
-        stage = '🔍 Pending';
+        await sendWhatsAppMessage(
+          phone,
+          `🔍 *We recently searched for matches for you!*\nOur AI engine continuously scans for new profiles in the background 24/7 and will alert you the moment a new match is found.\n\n⏳ You can run another manual search in *${cooldownCheck.retryAfterMin} minute(s)*.`
+        );
       }
+      return;
+    }
 
-      const lines = [
-        `*Match ${i + 1}:* ${otherName}`,
-        `📋 ${projectDesc}`,
-        stage,
-      ];
+    // 5. Record search timestamp
+    matchSearchLimiter.record(phone);
 
-      // For connected matches, re-include contact info
-      if (m.status === 'connected') {
-        if (isClient) {
-          const fl = freelancerMap.get(otherPhone);
-          lines.push(`📞 ${fl?.phone || otherPhone}`);
-          if (fl?.profile_link) lines.push(`🔗 ${fl.profile_link}`);
-        } else {
-          lines.push(`📞 ${otherPhone}`);
+    // 6. Execute live on-demand search
+    try {
+      let matches = [];
+      if (role === 'freelancer') {
+        matches = await findMatchesForFreelancer(profile);
+        if (matches.length > 0) {
+          await persistAndNotifyMatches({
+            matches,
+            initiatorRole: 'freelancer',
+            initiatorPhone: phone,
+            jobData: null,
+            freelancerData: profile,
+          });
+          await sendWhatsAppMessage(
+            phone,
+            `🎯 *Great news!* We found *${matches.length} matching project${matches.length > 1 ? 's' : ''}* for your skills and just reached out to the client! We'll notify you as soon as they confirm. 🚀`
+          );
+          return;
+        }
+      } else {
+        matches = await findMatchesForClient(profile);
+        if (matches.length > 0) {
+          await persistAndNotifyMatches({
+            matches,
+            initiatorRole: 'client',
+            initiatorPhone: phone,
+            jobData: profile,
+          });
+          await sendWhatsAppMessage(
+            phone,
+            `🎯 *Great news!* We found *${matches.length} matching freelancer${matches.length > 1 ? 's' : ''}* for your project and just reached out to the top candidate! We'll notify you as soon as they confirm. 🚀`
+          );
+          return;
         }
       }
 
-      return lines.join('\n');
-    });
-
-    const header = `📊 *Your Matches (${liveMatches.length}):*\n`;
-    await sendWhatsAppMessage(phone, header + '\n' + blocks.join('\n\n'));
+      // No new matches meeting threshold right now
+      if (connectedMatches.length > 0) {
+        const blocks = await buildLiveMatchBlocks(connectedMatches, phone);
+        await sendWhatsAppMessage(
+          phone,
+          `🔍 We ran a live scan across all active profiles, but no new matching candidates are available right now.\n\n📊 *Your Connected Matches (${connectedMatches.length}):*\n\n` +
+          blocks.join('\n\n') +
+          `\n\nWe'll automatically ping you as soon as a new match joins! 🔔`
+        );
+      } else {
+        await sendWhatsAppMessage(
+          phone,
+          `🔍 We just scanned all active profiles in real-time, but no immediate matches meet the threshold right now.\n\nWe'll automatically alert you the moment a matching ${role === 'client' ? 'freelancer' : 'project'} comes in! 🔔`
+        );
+      }
+    } catch (err) {
+      console.error('[matching] Error during on-demand match search:', err);
+      await sendWhatsAppMessage(
+        phone,
+        `We ran into a temporary issue while scanning for matches, but we'll continue searching in the background! 🔔`
+      );
+    }
     return;
   }
 
@@ -800,63 +941,8 @@ export async function handleIncomingMessage({ phone, messageText }) {
     }
   }
 
-  // --- 6. ALREADY COMPLETED / ON-DEMAND MATCH CHECK ---
-  // If they are fully registered, check if this is an on-demand match request.
-  // Otherwise, ignore the message and send the fallback reply.
+  // --- 6. ALREADY COMPLETED FALLBACK ---
   if (freelancer || (conversation && conversation.step === 'completed')) {
-    const ON_DEMAND_TRIGGERS = new Set(['?', '??', '???', 'bro', 'hey', 'hi', 'matches?']);
-    const isMatchCheck = ON_DEMAND_TRIGGERS.has(lowerText) ||
-                         lowerText.includes('any match') ||
-                         lowerText.includes('find match') ||
-                         lowerText.includes('search');
-
-    if (isMatchCheck) {
-      let role = 'freelancer';
-      let profile = freelancer;
-      if (!profile) {
-        profile = await findJobRequest(phone);
-        role = 'client';
-      }
-
-      if (profile) {
-        try {
-          let matches = [];
-          if (role === 'freelancer') {
-            matches = await findMatchesForFreelancer(profile);
-            if (matches.length > 0) {
-              await persistAndNotifyMatches({
-                matches,
-                initiatorRole: 'freelancer',
-                initiatorPhone: phone,
-                jobData: null,
-                freelancerData: profile,
-              });
-              await sendWhatsAppMessage(phone, `Found ${matches.length} project match${matches.length > 1 ? 'es' : ''} for you! 🎯`);
-            }
-          } else {
-            matches = await findMatchesForClient(profile);
-            if (matches.length > 0) {
-              await persistAndNotifyMatches({
-                matches,
-                initiatorRole: 'client',
-                initiatorPhone: phone,
-                jobData: profile,
-              });
-              await sendWhatsAppMessage(phone, `Found ${matches.length} matching freelancer${matches.length > 1 ? 's' : ''}, reaching out to them now! 🎯`);
-            }
-          }
-
-          if (matches.length === 0) {
-            await sendWhatsAppMessage(phone, `Still searching — no match yet, but we'll notify you the moment one shows up! 🔔`);
-          }
-        } catch (err) {
-          console.error('[matching] Error during on-demand match check:', err);
-          await sendWhatsAppMessage(phone, `We ran into an issue checking your matches, but we'll keep looking!`);
-        }
-        return;
-      }
-    }
-
     if (freelancer) {
       await sendWhatsAppMessage(phone, getAlreadyRegisteredReply());
     } else {

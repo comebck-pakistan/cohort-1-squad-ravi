@@ -53,8 +53,10 @@ function overlapRatio(setA, setB) {
   for (const token of setA) {
     if (setB.has(token)) intersection++;
   }
-  const union = new Set([...setA, ...setB]).size;
-  return union === 0 ? 0 : intersection / union;
+  // Szymkiewicz–Simpson overlap coefficient: measures how much of the smaller set (skills/stack)
+  // is covered by the reference set.
+  const minSize = Math.min(setA.size, setB.size);
+  return minSize === 0 ? 0 : Math.min(1.0, intersection / minSize);
 }
 
 // ── Simple hash for declined-pair comparison ─────────────────────────────────
@@ -78,11 +80,21 @@ function generateBatchId() {
 //  1. RULE-BASED SCORING  (0 – 100)
 // ═════════════════════════════════════════════════════════════════════════════
 function scoreRuleBased(freelancer, jobRequest) {
-  const descTokens = tokenize(jobRequest.project_description);
+  const descTokens = tokenize(
+    `${jobRequest.project_description || ''} ${jobRequest.brief_description || ''} ${jobRequest.hire_type || ''}`
+  );
 
-  // ── Skill overlap (50%) ────────────────────────────────────────────────
-  const skillTokens = tokenize(freelancer.skills);
-  const skillScore = overlapRatio(skillTokens, descTokens) * 100;
+  // ── Skill & domain overlap (50%) ─────────────────────────────────────────
+  const skillTokens = tokenize(
+    `${freelancer.skills || ''} ${freelancer.tools || ''} ${freelancer.preferences || ''} ${freelancer.brief_description || ''}`
+  );
+  
+  let skillScore = overlapRatio(skillTokens, descTokens) * 100;
+  // If either side has text but strict keyword token overlap is 0, give a 40 baseline
+  // so the AI scoring component (60% weight) can evaluate the semantic fit
+  if (skillScore === 0 && skillTokens.size > 0 && descTokens.size > 0) {
+    skillScore = 40;
+  }
 
   // ── Tool overlap (20%) — neutral 50 if either side is empty ────────────
   const toolTokens = tokenize(freelancer.tools);
@@ -116,7 +128,7 @@ function scoreRuleBased(freelancer, jobRequest) {
 
   // ── Availability Pulse Status Modifier ─────────────────────────────────
   let pulseMultiplier = 1.0;
-  if (freelancer.availability_status === 'available_now') {
+  if (freelancer.availability_status === 'available_now' || !freelancer.availability_status) {
     pulseMultiplier = 1.05; // +5% boost for actively available talent
   } else if (freelancer.availability_status === 'limited_hours') {
     pulseMultiplier = 0.95; // slight adjustment for limited capacity
@@ -128,12 +140,19 @@ function scoreRuleBased(freelancer, jobRequest) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  2. AI-BASED SCORING  (self-contained Groq call)
+//  2. AI-BASED SCORING  (self-contained Groq call with fallback models)
 // ═════════════════════════════════════════════════════════════════════════════
 const AI_SYSTEM_PROMPT = `You are a freelancer-job matching evaluator.
 Compare the job request against the freelancer profile.
 Return ONLY valid JSON: {"fit_score": 0-100, "reasoning": "one sentence"}
 No markdown, no preamble, no extra keys.`;
+
+const GROQ_FALLBACK_MODELS = [
+  config.groq.model,
+  'qwen/qwen3.6-27b',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+].filter(Boolean);
 
 async function scoreAIFit(freelancer, jobRequest) {
   const userContent = [
@@ -151,54 +170,59 @@ async function scoreAIFit(freelancer, jobRequest) {
     `Freelancer Verified Reputation: ${freelancer.rating_avg ? `${freelancer.rating_avg}⭐ (${freelancer.review_count} verified projects completed)` : 'New talent (0 reviews yet)'}`,
   ].join('\n');
 
-  try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.groq.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: config.groq.model,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: AI_SYSTEM_PROMPT },
-          { role: 'user',   content: userContent },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[matching] Groq AI scoring error (${response.status}):`, errText);
-      return { fit_score: 50, reasoning: 'AI scoring unavailable' };
-    }
-
-    const data = await response.json();
-    const rawContent = data.choices[0].message.content;
-
-    let parsed;
+  for (const modelName of GROQ_FALLBACK_MODELS) {
     try {
-      parsed = JSON.parse(rawContent);
-    } catch {
-      const cleaned = rawContent.replace(/```json|```/g, '').trim();
-      parsed = JSON.parse(cleaned);
-    }
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.groq.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: modelName,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: AI_SYSTEM_PROMPT },
+            { role: 'user',   content: userContent },
+          ],
+        }),
+      });
 
-    const score = Number(parsed.fit_score);
-    if (!Number.isFinite(score) || score < 0 || score > 100) {
-      console.warn('[matching] AI returned invalid fit_score, falling back to 50');
-      return { fit_score: 50, reasoning: parsed.reasoning || 'AI score out of range' };
-    }
+      if (!response.ok) {
+        const errText = await response.text();
+        console.warn(`[matching] Groq model ${modelName} error (${response.status}):`, errText);
+        continue; // Try next fallback model
+      }
 
-    return {
-      fit_score: score,
-      reasoning: parsed.reasoning || '',
-    };
-  } catch (err) {
-    console.error('[matching] AI scoring exception:', err.message);
-    return { fit_score: 50, reasoning: 'AI scoring unavailable' };
+      const data = await response.json();
+      const rawContent = data.choices?.[0]?.message?.content;
+      if (!rawContent) continue;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(rawContent);
+      } catch {
+        const cleaned = rawContent.replace(/```json|```/g, '').trim();
+        parsed = JSON.parse(cleaned);
+      }
+
+      const score = Number(parsed.fit_score);
+      if (!Number.isFinite(score) || score < 0 || score > 100) {
+        console.warn('[matching] AI returned invalid fit_score, falling back to 50');
+        return { fit_score: 50, reasoning: parsed.reasoning || 'AI score out of range' };
+      }
+
+      return {
+        fit_score: score,
+        reasoning: parsed.reasoning || '',
+      };
+    } catch (err) {
+      console.warn(`[matching] AI scoring exception on model ${modelName}:`, err.message);
+    }
   }
+
+  // If all Groq models fail, fallback gracefully
+  return { fit_score: 50, reasoning: 'AI scoring unavailable' };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -217,7 +241,7 @@ async function scoreCandidates(candidates, jobRequest, freelancerExtractor) {
     ) / 100;
 
     console.log(
-      `[matching] scoring ${freelancer.phone || candidate.phone} — rule: ${ruleScore} ai: ${aiScore} final: ${finalScore}`,
+      `[matching] Candidate evaluation — rule: ${ruleScore}, AI: ${aiScore}, final: ${finalScore} (threshold: ${config.matching.threshold})`,
     );
 
     scored.push({ candidate, ruleScore, aiScore, finalScore, aiReasoning });
@@ -257,7 +281,7 @@ export async function findMatchesForClient(jobRequest) {
       if (vectorMatches && vectorMatches.length > 0) {
         candidates = vectorMatches;
         isVectorSearch = true;
-        console.log(`[matching] pgvector retrieved ${vectorMatches.length} semantic candidate(s) for job ${jobRequest.phone}`);
+        console.log(`[matching] pgvector retrieved ${vectorMatches.length} semantic candidate(s)`);
       }
     }
   } catch (vecErr) {
@@ -282,7 +306,7 @@ export async function findMatchesForClient(jobRequest) {
 
   const liveMatchedPhones = new Set(liveMatches.map(m => m.freelancer_phone));
 
-  const eligible = candidates.filter(f => !declinedSet.has(f.phone) && !liveMatchedPhones.has(f.phone));
+  const eligible = candidates.filter(f => f.phone !== jobRequest.phone && !declinedSet.has(f.phone) && !liveMatchedPhones.has(f.phone));
   console.log(`[matching] Client scan: ${eligible.length} eligible freelancer(s) (${candidates.length} pool, ${declinedSet.size} declined-excluded, ${liveMatchedPhones.size} live-excluded, vector=${isVectorSearch})`);
 
   if (eligible.length === 0) return [];
@@ -312,7 +336,7 @@ export async function findMatchesForFreelancer(freelancer) {
       if (vectorMatches && vectorMatches.length > 0) {
         candidates = vectorMatches;
         isVectorSearch = true;
-        console.log(`[matching] pgvector retrieved ${vectorMatches.length} semantic job(s) for freelancer ${freelancer.phone}`);
+        console.log(`[matching] pgvector retrieved ${vectorMatches.length} semantic job(s)`);
       }
     }
   } catch (vecErr) {
@@ -337,6 +361,7 @@ export async function findMatchesForFreelancer(freelancer) {
   const liveMatchedPhones = new Set(liveMatches.map(m => m.job_phone));
 
   const eligible = candidates.filter(jr => {
+    if (jr.phone === freelancer.phone) return false;
     if (liveMatchedPhones.has(jr.phone)) return false;
 
     const prevHash = declinedMap.get(jr.phone);
@@ -359,7 +384,7 @@ export async function findMatchesForFreelancer(freelancer) {
     ) / 100;
 
     console.log(
-      `[matching] scoring job ${jr.phone} for freelancer ${freelancer.phone} — rule: ${ruleScore} ai: ${aiScore} final: ${finalScore}`,
+      `[matching] Candidate evaluation — rule: ${ruleScore}, AI: ${aiScore}, final: ${finalScore} (threshold: ${config.matching.threshold})`,
     );
 
     scored.push({ candidate: jr, ruleScore, aiScore, finalScore, aiReasoning });

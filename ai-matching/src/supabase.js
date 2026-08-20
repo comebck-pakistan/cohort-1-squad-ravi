@@ -1,8 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
 import { generateEmbedding, buildFreelancerEmbeddingText, buildJobEmbeddingText } from './embeddings.js';
+import { maskPhone, sanitizeUrl } from './security.js';
 
-// Service role key bypasses RLS entirely - same as the n8n Supabase credential did.
+// Service role key bypasses RLS on the backend service.
 export const supabase = createClient(config.supabase.url, config.supabase.serviceRoleKey);
 
 // --- Equivalent of "Search Conversations" node ---
@@ -73,11 +74,16 @@ export async function saveConversation({ id, phone, role, step, temp_data }) {
 }
 
 // --- Equivalent of "Delete Conversations" + "Delete Freelancers" (reset command) ---
-// Full wipe: profile, job, conversation, AND any match rows tied to this phone.
+// Full wipe: profile, job, conversation, declined pairs, AND any match rows tied to this phone.
 export async function resetUser(phone) {
+  const masked = maskPhone(phone);
+  console.log(`[supabase] Resetting all data for user ${masked}`);
   await supabase.from('conversations').delete().eq('phone', phone);
   await supabase.from('freelancers').delete().eq('phone', phone);
   await supabase.from('job_requests').delete().eq('phone', phone);
+
+  // Clear any declined pairs associated with this phone
+  await supabase.from('declined_pairs').delete().or(`freelancer_phone.eq.${phone},job_phone.eq.${phone}`);
 
   // Cancel any matches where this phone appears on either side
   await supabase
@@ -108,8 +114,8 @@ export async function saveFreelancerProfile(phone, data) {
   const row = {
     phone,
     name:              data.name              || null,
-    profile_link:      data.profile_link      || null,
-    portfolio:         data.portfolio         || null,
+    profile_link:      sanitizeUrl(data.profile_link) || null,
+    portfolio:         sanitizeUrl(data.portfolio)    || null,
     skills:            data.skills            || null,
     tools:             data.tools             || null,
     rate:              data.rate              || null,
@@ -121,17 +127,39 @@ export async function saveFreelancerProfile(phone, data) {
     ...(embedding ? { embedding } : {}),
   };
 
-  console.log('[supabase] saveFreelancerProfile — upserting row (with vector embedding:', !!embedding, ')');
+  const masked = maskPhone(phone);
+  console.log(`[supabase] saveFreelancerProfile — upserting row for ${masked} (vector embedding: ${!!embedding})`);
 
-  const { data: upserted, error } = await supabase
+  let { data: upserted, error } = await supabase
     .from('freelancers')
     .upsert(row, { onConflict: 'phone' })
     .select();
 
+  // If column doesn't exist yet in Supabase schema, retry with basic core columns
+  if (error && (error.message?.includes('is_available') || error.message?.includes('status') || error.code === 'PGRST204')) {
+    console.warn('[supabase] saveFreelancerProfile schema notice (retrying without extended columns):', error.message);
+    const basicRow = {
+      phone,
+      name:              data.name              || null,
+      profile_link:      sanitizeUrl(data.profile_link) || null,
+      portfolio:         sanitizeUrl(data.portfolio)    || null,
+      skills:            data.skills            || null,
+      tools:             data.tools             || null,
+      rate:              data.rate              || null,
+      availability:      data.availability      || null,
+      preferences:       data.preferences       || null,
+      brief_description: data.brief_description || null,
+      ...(embedding ? { embedding } : {}),
+    };
+    const retry = await supabase.from('freelancers').upsert(basicRow, { onConflict: 'phone' }).select();
+    upserted = retry.data;
+    error = retry.error;
+  }
+
   if (error) {
     console.error('[supabase] saveFreelancerProfile FAILED:', JSON.stringify(error));
   } else {
-    console.log('[supabase] saveFreelancerProfile OK — row id:', upserted?.[0]?.id);
+    console.log(`[supabase] saveFreelancerProfile OK — row id: ${upserted?.[0]?.id}`);
   }
 }
 
@@ -159,34 +187,63 @@ export async function saveJobRequest(phone, data) {
     deadline_normalized: data.deadline_normalized  || null,
     is_recurring:        data.is_recurring         ?? null,
     brief_description:   data.brief_description    || null,
+    status:              'active',
     is_available:        true,
     ...(embedding ? { embedding } : {}),
   };
 
-  console.log('[supabase] saveJobRequest — upserting row (with vector embedding:', !!embedding, ')');
+  const masked = maskPhone(phone);
+  console.log(`[supabase] saveJobRequest — upserting row for ${masked} (vector embedding: ${!!embedding})`);
 
-  const { data: upserted, error } = await supabase
+  let { data: upserted, error } = await supabase
     .from('job_requests')
     .upsert(row, { onConflict: 'phone' })
     .select();
 
+  // If column doesn't exist yet in Supabase schema, retry with basic core columns
+  if (error && (error.message?.includes('is_available') || error.message?.includes('status') || error.code === 'PGRST204')) {
+    console.warn('[supabase] saveJobRequest schema notice (retrying without extended columns):', error.message);
+    const basicRow = {
+      phone,
+      name:                data.name                || null,
+      project_description: data.project_description || null,
+      hire_type:           data.hire_type           || null,
+      budget_project:      data.budget_project       || null,
+      budget_hourly:       data.budget_hourly        || null,
+      project_count:       data.project_count        || null,
+      deadline:            data.deadline             || null,
+      deadline_normalized: data.deadline_normalized  || null,
+      is_recurring:        data.is_recurring         ?? null,
+      brief_description:   data.brief_description    || null,
+      ...(embedding ? { embedding } : {}),
+    };
+    const retry = await supabase.from('job_requests').upsert(basicRow, { onConflict: 'phone' }).select();
+    upserted = retry.data;
+    error = retry.error;
+  }
+
   if (error) {
     console.error('[supabase] saveJobRequest FAILED:', JSON.stringify(error));
   } else {
-    console.log('[supabase] saveJobRequest OK — row id:', upserted?.[0]?.id);
+    console.log(`[supabase] saveJobRequest OK — row id: ${upserted?.[0]?.id}`);
   }
 }
 
 // --- Updates a single field for an already-completed freelancer ---
 export async function updateFreelancerField(phone, field, value) {
-  const updates = { [field]: value, updated_at: new Date().toISOString() };
+  let cleanValue = value;
+  if (field === 'profile_link' || field === 'portfolio') {
+    cleanValue = sanitizeUrl(value);
+  }
+
+  const updates = { [field]: cleanValue, updated_at: new Date().toISOString() };
 
   // If updating a semantic field, recalculate the vector embedding
   const SEMANTIC_FIELDS = new Set(['skills', 'tools', 'preferences', 'brief_description', 'name']);
   if (SEMANTIC_FIELDS.has(field)) {
     try {
       const current = await findFreelancer(phone);
-      const merged = { ...(current || {}), [field]: value };
+      const merged = { ...(current || {}), [field]: cleanValue };
       const embeddingText = buildFreelancerEmbeddingText(merged);
       const embedding = await generateEmbedding(embeddingText);
       if (embedding) {
@@ -246,34 +303,34 @@ export async function searchJobsByVector(queryEmbedding, threshold = 0.3, limit 
   }
 }
 
-// --- Fetch active freelancers (status = 'active') for matching ---
+// --- Fetch active freelancers for matching ---
 export async function getActiveFreelancers() {
   const { data, error } = await supabase
     .from('freelancers')
-    .select('*')
-    .eq('status', 'active')
-    .eq('is_available', true);
+    .select('*');
 
   if (error) {
     console.error('[supabase] getActiveFreelancers error:', JSON.stringify(error));
     return [];
   }
-  return data || [];
+  
+  // Resilient memory filter: exclude only if explicitly inactive or unavailable
+  return (data || []).filter(f => f.status !== 'inactive' && f.status !== 'paused' && f.is_available !== false);
 }
 
-// --- Fetch active job requests (status = 'active') for matching ---
+// --- Fetch active job requests for matching ---
 export async function getActiveJobRequests() {
   const { data, error } = await supabase
     .from('job_requests')
-    .select('*')
-    .eq('status', 'active')
-    .eq('is_available', true);
+    .select('*');
 
   if (error) {
     console.error('[supabase] getActiveJobRequests error:', JSON.stringify(error));
     return [];
   }
-  return data || [];
+  
+  // Resilient memory filter: exclude only if explicitly inactive or unavailable
+  return (data || []).filter(j => j.status !== 'inactive' && j.status !== 'paused' && j.is_available !== false);
 }
 
 // --- Fetch declined pairs to exclude from matching ---
@@ -371,10 +428,11 @@ export async function updateUserStatus(phone, role, status) {
     .update({ status })
     .eq('phone', phone);
 
+  const masked = maskPhone(phone);
   if (error) {
     console.error(`[supabase] updateUserStatus (${table}) FAILED:`, JSON.stringify(error));
   } else {
-    console.log(`[supabase] updateUserStatus — ${phone} → ${status}`);
+    console.log(`[supabase] updateUserStatus — ${masked} → ${status}`);
   }
 }
 
@@ -386,10 +444,11 @@ export async function setAvailability(phone, role, isAvailable) {
     .update({ is_available: isAvailable, updated_at: new Date().toISOString() })
     .eq('phone', phone);
 
+  const masked = maskPhone(phone);
   if (error) {
-    console.error(`[supabase] setAvailability (${table}, ${phone}) FAILED:`, JSON.stringify(error));
+    console.error(`[supabase] setAvailability (${table}, ${masked}) FAILED:`, JSON.stringify(error));
   } else {
-    console.log(`[supabase] setAvailability — ${phone} (${table}) → ${isAvailable}`);
+    console.log(`[supabase] setAvailability — ${masked} (${table}) → ${isAvailable}`);
   }
 }
 
@@ -448,7 +507,8 @@ export async function saveReview({
       .update({ rating_avg: avg, review_count: count })
       .eq('phone', revieweePhone);
 
-    console.log(`[supabase] Updated reputation for ${revieweePhone} (${targetTable}): ${avg}⭐ (${count} reviews)`);
+    const masked = maskPhone(revieweePhone);
+    console.log(`[supabase] Updated reputation for ${masked} (${targetTable}): ${avg}⭐ (${count} reviews)`);
   }
 
   return data?.[0] || null;
@@ -501,4 +561,3 @@ export async function markFeedbackRequested(matchId) {
 
   if (error) console.error(`[supabase] markFeedbackRequested (${matchId}) error:`, JSON.stringify(error));
 }
-

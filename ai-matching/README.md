@@ -6,6 +6,21 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 ## Changelog by Qaim
 
+### Comprehensive Security Hardening & Defenses 🛡️
+- **Meta Webhook HMAC SHA-256 Verification:** Cryptographically validates incoming Meta requests via the `X-Hub-Signature-256` header and `WHATSAPP_APP_SECRET` using `crypto.timingSafeEqual` in [`src/security.js`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/src/security.js). Blocks webhook spoofing, forged message injections, and unauthorized match tampering.
+- **Protected Internal Automation Endpoints:** Secured `/api/check-feedback` and `/api/check-pulse` with `requireCronAuth` middleware. Schedulers must pass `Authorization: Bearer <CRON_SECRET>` or `X-API-Key`. Sanitized error handlers prevent leaking internal database schemas in 500 responses.
+- **Multi-Layer Anti-DoS & Anti-Abuse Rate Limiting:**
+  - **HTTP IP Rate Limiter:** Added `express-rate-limit` (120 req/min) to defend against volumetric web floods.
+  - **WhatsApp Phone Rate Limiter:** Added an in-memory sliding window limiter (`UserRateLimiter`, 10 msgs/min per phone) to prevent rapid message bursts and LLM quota/wallet exhaustion.
+- **Server Hardening & Secure Headers:** Integrated `helmet()` to set standard security headers (`HSTS`, `X-Frame-Options`, `X-Content-Type-Options`, and removal of `X-Powered-By`) and bounded JSON request bodies to `64kb`.
+- **LLM Prompt Injection Defenses:**
+  - Enforced message length capping (`MAX_MESSAGE_LENGTH=1000`) and control character stripping in [`src/groq.js`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/src/groq.js).
+  - Isolated untrusted user messages inside structured `<user_input>` XML tags with strict system prompt anti-injection rules.
+- **URL Sanitization & Safe Portfolio Links:** Strict validator (`isValidUrl` and `sanitizeUrl`) rejects `javascript:`, `file:`, `data:`, or malformed URLs before storing profile/portfolio links.
+- **PII Privacy Masking:** Added `maskPhone` to mask sensitive phone numbers in console and server logs (`+1234****89`).
+- **Database Row Level Security (RLS):** Added [`migrations/04_enable_rls.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/04_enable_rls.sql) to lock down all tables (`conversations`, `freelancers`, `job_requests`, `matches`, `reviews`, `declined_pairs`), denying public `anon` access.
+- **Automated Security Test Suite:** Added [`test/security.test.js`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/test/security.test.js) and configured `npm test` across all 5 test suites.
+
 ### Weekly "Availability Pulse" Check-In 🟢🟡🔴
 - **Automated Weekly Availability Pulse:** Pings active freelancers once a week with a 1-tap WhatsApp capacity check to keep match pools fresh and eliminate ghosting (`src/pulse.js`).
 - **Interactive 1-Tap Capacity Buttons:**
@@ -14,7 +29,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
   - `[🔴 Booked / Pause]`: Safely pauses new match notifications so freelancers can focus on current client work without spam.
 - **Fast-Path Zero-Token Updates:** Webhook and local message handlers parse pulse button IDs and natural text ("i am available", "pause matches") in 0ms with 0 Groq AI token cost.
 - **Matching Engine Boost:** Matching algorithm gives active capacity preference (`available_now`) to ensure clients get fast replies.
-- **Automated Background Scanner:** Added [`migrations/03_availability_pulse.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/03_availability_pulse.sql), a 12-hour background scan interval, and an on-demand trigger endpoint (`ALL /api/check-pulse`).
+- **Automated Background Scanner:** Added [`migrations/03_availability_pulse.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/03_availability_pulse.sql), a 12-hour background scan interval, and an on-demand trigger endpoint (`/api/check-pulse`).
 
 ### Project Feedback & Verified Reputation Score ⭐
 - **Automated Post-Project Feedback Loop:** When a project's deadline passes, the bot scans connected matches and automatically triggers an interactive WhatsApp review prompt to both Client and Freelancer (`src/feedback.js`).
@@ -22,7 +37,7 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 - **Two-Step Review with Notes:** After rating, users can leave an optional review note with a `[Skip Note]` quick reply.
 - **Verified Reputation Math:** Ratings are stored in Supabase (`reviews` table), updating real-time average ratings (`rating_avg`) and completed review counts (`review_count`) on profiles.
 - **Dynamic Matching Algorithm Boost:** Freelancers with verified 5-star ratings receive a rule-based boost (up to +15%), and their verified track record is dynamically factored into Groq AI's fit evaluation and match pitch.
-- **SQL Migration & Background Scanner:** Added [`migrations/02_feedback_and_reputation.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/02_feedback_and_reputation.sql), a 6-hour automated background scanner, and an on-demand endpoint (`ALL /api/check-feedback`).
+- **SQL Migration & Background Scanner:** Added [`migrations/02_feedback_and_reputation.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/02_feedback_and_reputation.sql), a 6-hour automated background scanner, and an on-demand endpoint (`/api/check-feedback`).
 
 ### Vector Semantic Search with pgvector in Supabase ⚡
 - Integrated **pgvector semantic search** in Supabase to eliminate the limitations of exact keyword matching (e.g. matching "Frontend Engineer" with "React Dev" or "Copywriter" with "Content Creator").
@@ -84,7 +99,8 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 
 | File | Purpose |
 |---|---|
-| `src/server.js` | The webhook server (GET verify + POST receive for text and interactive messages) |
+| `src/server.js` | Webhook server (GET verify + POST receive) with Helmet headers, rate limiting, and HMAC signature verification |
+| `src/security.js` | Webhook HMAC verification, cron bearer auth, per-phone rate limiter, PII log masker, and URL sanitizers |
 | `src/handlers/handleMessage.js` | Core conversation flow, step machine, match replies, and availability management |
 | `src/handlers/icebreakerHandler.js` | Handler for interactive list menus, icebreakers, and returning-user welcome options |
 | `src/localHandler.js` | Fast-path local parsing for ~80% of messages (roles, hire types, skills, rates, buttons) without AI calls |
@@ -92,15 +108,17 @@ A plain Node.js/Express rewrite of the original n8n workflow. Same logic, same S
 | `src/embeddings.js` | Dense vector embedding generator and semantic text formatters for profiles and jobs |
 | `src/feedback.js` | Automated post-deadline feedback trigger scanner and interactive rating prompts |
 | `src/pulse.js` | Automated weekly availability pulse scanner and 1-tap capacity management |
-| `src/groq.js` | Groq LLM fallback for ambiguous conversation extractions and edge cases |
+| `src/groq.js` | Groq LLM fallback with prompt injection defenses and data extraction schema enforcement |
 | `src/matching.js` | Hybrid vector semantic search + verified reputation boost + rule-based + AI scoring engine |
 | `src/replies.js` | Randomized question banks, niche variants, and interactive button configurations |
-| `src/supabase.js` | All Supabase database operations (profiles, job requests, reviews, reputation, matches, conversations) |
+| `src/supabase.js` | Supabase database operations (profiles, job requests, reviews, reputation, matches, conversations) |
 | `src/whatsapp.js` | WhatsApp Cloud API integration (text messages, interactive buttons, list menus, typing status) |
-| `src/config.js` | Environment configuration, embedding settings, and matching weights |
-| `migrations/01_pgvector_setup.sql` | PostgreSQL DDL script for pgvector extension, 384-dim embedding columns, and RPC search functions |
-| `migrations/02_feedback_and_reputation.sql` | PostgreSQL DDL script for reviews table, reputation metrics, and match feedback tracking |
-| `migrations/03_availability_pulse.sql` | PostgreSQL DDL script for freelancer availability status and last pulse check tracking |
+| `src/config.js` | Environment configuration, fail-fast startup validator, and matching weights |
+| `migrations/01_pgvector_setup.sql` | PostgreSQL DDL for pgvector extension, 384-dim embedding columns, and RPC search functions |
+| `migrations/02_feedback_and_reputation.sql` | PostgreSQL DDL for reviews table, reputation metrics, and match feedback tracking |
+| `migrations/03_availability_pulse.sql` | PostgreSQL DDL for freelancer availability status and last pulse check tracking |
+| `migrations/04_enable_rls.sql` | PostgreSQL DDL for Row Level Security (RLS) locking down public anon access on all tables |
+| `test/security.test.js` | Automated unit tests for webhook HMAC verification, cron auth, rate limiting, URL validation, and PII masking |
 
 ---
 
@@ -129,7 +147,7 @@ Inside the project folder:
 ```bash
 npm install
 ```
-This reads `package.json` and generates the `node_modules` folder (never uploaded to GitHub).
+This installs `express`, `@supabase/supabase-js`, `dotenv`, `helmet`, and `express-rate-limit`.
 
 ### 4. Set up environment variables
 
@@ -138,196 +156,71 @@ cp .env.example .env
 ```
 Then fill in `.env` with your real values:
 
-| Variable | Where to get it |
-|---|---|
-| `WHATSAPP_VERIFY_TOKEN` | Make this up yourself — any secret string |
-| `WHATSAPP_PHONE_NUMBER_ID` | developers.facebook.com → your app → WhatsApp → API Setup |
-| `WHATSAPP_ACCESS_TOKEN` | Same page as above (rotate if ever exposed) |
-| `SUPABASE_URL` | supabase.com → your project → Settings → API |
-| `SUPABASE_SERVICE_ROLE_KEY` | Same page (the **service_role** key, not "anon") |
-| `GROQ_API_KEY` | console.groq.com → API Keys (rotate if ever exposed) |
+| Variable | Required? | Where to get it |
+|---|:---:|---|
+| `WHATSAPP_VERIFY_TOKEN` | Yes | Make this up yourself — any secret string for webhook challenge |
+| `WHATSAPP_PHONE_NUMBER_ID` | Yes | developers.facebook.com → your app → WhatsApp → API Setup |
+| `WHATSAPP_ACCESS_TOKEN` | Yes | Same page as above (use System User permanent token in production) |
+| `WHATSAPP_APP_SECRET` | Recommended | developers.facebook.com → App Settings → Basic → App Secret (for HMAC SHA-256 verification) |
+| `CRON_SECRET` | Recommended | Any random secure secret string (protects `/api/check-feedback` and `/api/check-pulse`) |
+| `SUPABASE_URL` | Yes | supabase.com → your project → Settings → API |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Same page (the **service_role** key, not "anon") |
+| `GROQ_KEY` / `GROQ_API_KEY` | Yes | console.groq.com → API Keys |
+| `GROQ_MODEL` | No | Default: `qwen/qwen3.6-27b` (100% Free on Groq, high rate-limit) |
+| `MATCH_SEARCH_COOLDOWN_MS` | No | Default: `600000` (10 minutes on-demand match cooldown) |
+| `HUGGINGFACE_API_KEY` | Optional | huggingface.co → Settings → Access Tokens (for pgvector embeddings) |
 
 `.env` is in `.gitignore` — it never gets pushed to GitHub.
 
-### 5. Set up Supabase (database)
+---
 
-Go to Supabase → **SQL Editor** → New Query, and run this once to create every table your bot needs in one shot:
+### 5. Set up Supabase (Database & RLS)
 
-```sql
--- Conversations table (temporary state while onboarding)
-create table if not exists conversations (
-  id bigint generated always as identity primary key,
-  phone text not null,
-  step text,
-  role text,
-  temp_data jsonb default '{}'::jsonb,
-  updated_at timestamptz default now(),
-  unique (phone)
-);
+Go to Supabase → **SQL Editor** → New Query, and execute the migration files:
 
--- Freelancers table (permanent record)
-create table if not exists freelancers (
-  id bigint generated always as identity primary key,
-  phone text not null,
-  name text,
-  profile_link text,
-  portfolio text,
-  skills text,
-  tools text,
-  rate text,
-  availability text,
-  preferences text,
-  created_at timestamp default now(),
-  updated_at timestamptz default now(),
-  unique (phone)
-);
+1. **Base Tables:** Run the baseline tables setup.
+2. **Vector Embeddings (01):** Run [`migrations/01_pgvector_setup.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/01_pgvector_setup.sql).
+3. **Feedback & Reputation (02):** Run [`migrations/02_feedback_and_reputation.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/02_feedback_and_reputation.sql).
+4. **Availability Pulse (03):** Run [`migrations/03_availability_pulse.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/03_availability_pulse.sql).
+5. **Row Level Security (04):** Run [`migrations/04_enable_rls.sql`](file:///d:/Cohort%20Projects/WHATSAPP%20MATCHING%20AI/ai%20matching-bot/migrations/04_enable_rls.sql) to restrict public table access.
 
--- Job requests table (permanent record for clients)
-create table if not exists job_requests (
-  id bigint generated always as identity primary key,
-  phone text not null,
-  name text,
-  project_description text,
-  hire_type text,
-  budget_project text,
-  budget_hourly text,
-  project_count text,
-  deadline text,
-  deadline_normalized text,
-  is_recurring boolean,
-  brief_description text,
-  created_at timestamp default now(),
-  unique (phone)
-);
+---
 
--- Matches table (Phase 3 — matching results)
-create table if not exists matches (
-  id bigint generated always as identity primary key,
-  job_phone text not null,
-  freelancer_phone text not null,
-  rule_score numeric,
-  ai_score numeric,
-  final_score numeric,
-  ai_reasoning text,
-  status text default 'notified',
-  created_at timestamptz default now()
-);
+### 6. Run Unit & Security Tests
+
+Run the complete test suite locally:
+```bash
+npm test
 ```
+Runs 5 comprehensive test suites:
+- Security (HMAC, Cron auth, Rate limits, URL validation, PII masking)
+- Interactive buttons & quick replies
+- Feedback & reputation scoring
+- Availability pulse parsing
+- Vector semantic search embeddings & cosine similarity
 
-**Checking your database anytime later** — instead of clicking through each table tab, run this to see every table and column at once:
-```sql
-select table_name, column_name, data_type
-from information_schema.columns
-where table_schema = 'public'
-order by table_name, ordinal_position;
-```
+---
 
-View recent rows in any table:
-```sql
-select * from conversations order by id desc limit 20;
-select * from freelancers order by id desc limit 20;
-select * from job_requests order by id desc limit 20;
-select * from matches order by id desc limit 20;
-```
-
-Count rows:
-```sql
-select count(*) from conversations;
-```
-
-### 6. Get a Groq API key
-
-1. Go to [console.groq.com](https://console.groq.com) → sign up/log in
-2. **API Keys** → **Create API Key** → copy it immediately (shown once)
-3. Paste into `.env` as `GROQ_API_KEY`
-
-**Note:** Groq's free tier has a daily token limit (TPD) per model — it resets on a rolling window. If you hit `429 rate_limit_exceeded`, wait for the reset time given in the error message.
-
-### 7. Set up WhatsApp (Meta for Developers)
-
-1. Go to [developers.facebook.com](https://developers.facebook.com) → **My Apps** → **Create App** → choose **Business**
-2. In your app dashboard → **WhatsApp** → **API Setup**
-3. Copy the **temporary access token** → `WHATSAPP_ACCESS_TOKEN` (expires in 24h — generate a permanent token later via a System User for production)
-4. Copy the **Phone Number ID** → `WHATSAPP_PHONE_NUMBER_ID`
-5. Make up your own `WHATSAPP_VERIFY_TOKEN` and use the exact same string in Meta's dashboard later
-
-### 8. Run it locally
+### 7. Run it locally
 
 ```bash
 npm run dev
 ```
 You should see `🚀 The bot listening on port 3000`.
 
-### 9. Expose it to the internet for testing (ngrok)
+### 8. Expose it to the internet for testing (ngrok)
 
-WhatsApp needs a public HTTPS URL — your bot on `localhost` isn't reachable from the internet.
+WhatsApp needs a public HTTPS URL:
 
-1. Create a free account at [ngrok.com](https://ngrok.com), copy your authtoken
-2. One-time setup: `ngrok config add-authtoken YOUR_TOKEN_HERE`
-3. Every time you test, in a second terminal: `ngrok http 3000`
-4. Copy the generated URL (e.g. `https://abcd1234.ngrok-free.app`)
-5. In Meta → WhatsApp → Configuration → Webhook, enter `https://abcd1234.ngrok-free.app/webhook` + your `WHATSAPP_VERIFY_TOKEN` → **Verify and Save**
-
-**Note:** every ngrok restart gives a new URL (on the free plan) — re-paste it into Meta each time.
-
-### 10. Deploy live (Railway) — only needed for the permanently-live version
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-git push -u origin main
-```
-1. [railway.app](https://railway.app) → sign up (GitHub login works) → **New Project** → **Deploy from GitHub repo**
-2. Railway auto-detects Node.js and runs `npm install` + `npm start`
-3. Go to your service → **Variables** tab → add all 6 values from `.env`
-4. Railway gives you a public URL like `https://your-bot-production.up.railway.app`
-5. Use `https://.../webhook` as your permanent webhook URL in Meta's dashboard
-
-From here on, every `git push` to `main` auto-redeploys.
+1. In a second terminal: `ngrok http 3000`
+2. Copy the generated URL (e.g. `https://abcd1234.ngrok-free.app`)
+3. In Meta → WhatsApp → Configuration → Webhook, enter `https://abcd1234.ngrok-free.app/webhook` + your `WHATSAPP_VERIFY_TOKEN` → **Verify and Save**
 
 ---
 
-## Committing & Pushing Changes
+### 9. Deploy live (Railway)
 
-```bash
-git add .
-git commit -m "short title here" -m "detailed description here"
-git push origin main
-```
-
-If your commit message has quotes or multiple lines and the terminal misbehaves, write the message to a file instead:
-```bash
-git add .
-git commit -F commit-msg.txt
-git push origin main
-```
-
----
-
-## Common Problems
-
-| Problem | Fix |
-|---|---|
-| `npm: command not found` / `node: command not found` | Reinstall Node.js, fully restart your terminal |
-| `npm install` gives red errors | Make sure you're inside the project folder (`package.json` should be visible via `dir`/`ls`) |
-| Bot runs but WhatsApp messages never arrive | Check ngrok is running and its URL is current in Meta's dashboard; confirm `/webhook` is at the end of the URL; confirm `WHATSAPP_VERIFY_TOKEN` matches exactly |
-| Webhook won't "Verify and Save" | Make sure both `npm run dev` and `ngrok` are running at the same time |
-| "unauthorized" / API key error | Re-check the key was copied fully into `.env`, no extra spaces, filename is exactly `.env` |
-| `Groq API error (429)` — rate limit | Wait for the reset window given in the error (daily token limit); consider adding local pre-checks to reduce AI calls for simple answers |
-| Supabase insert fails with a "null value in column X violates not-null constraint" | Check for legacy columns with leftover `NOT NULL` constraints that the current code no longer writes to — drop the constraint or the column |
-| `git push` rejected / diverged history | Don't edit files directly on GitHub's web UI if you also work locally — this splits your history. Pull first (`git pull origin main`) before pushing, or resolve conflicts locally |
-
----
-
-## Notes for Team Testing (not deploying)
-
-You do **not** need to deploy to Railway to test your own changes. Just run `npm run dev` + `ngrok http 3000` locally (Section 9) — that's all most of the team needs. Deployment is only for whoever manages the final always-online version.
-
-To let a teammate test your local build:
-1. Keep `npm run dev` and `ngrok http 3000` both running
-2. Send them the WhatsApp test number connected to your bot
-3. Watch your terminal for live logs while they chat — useful for catching bugs together
-4. Closing either terminal takes the bot offline — expected for local testing
+1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**
+2. Variables tab → add all environment variables from `.env`
+3. Railway gives you a public URL like `https://your-bot-production.up.railway.app`
+4. Use `https://your-bot-production.up.railway.app/webhook` in Meta Dashboard
