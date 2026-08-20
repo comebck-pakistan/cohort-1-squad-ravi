@@ -5,21 +5,29 @@ import { config } from './config.js';
 export async function sendWhatsAppMessage(toPhone, bodyText) {
   const url = `https://graph.facebook.com/v25.0/${config.whatsapp.phoneNumberId}/messages`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.whatsapp.accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: toPhone,
-      type: 'text',
-      text: { preview_url: false, body: bodyText },
-    }),
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.whatsapp.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: toPhone,
+        type: 'text',
+        text: { preview_url: false, body: bodyText },
+      }),
+    });
 
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[whatsapp] sendWhatsAppMessage error (${response.status}) to ${toPhone}:`, errText);
+    }
+  } catch (err) {
+    console.error(`[whatsapp] sendWhatsAppMessage exception for ${toPhone}:`, err.message);
+  }
 }
 
 // Sends a WhatsApp Interactive Button Message (Quick-Reply Buttons).
